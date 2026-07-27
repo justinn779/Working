@@ -1,0 +1,20 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Shared, append-only event cache: anyone can read (so cached events
+    // stay usable offline-ish/client-side), but only the Cloud Function
+    // (admin SDK, bypasses rules) may write — clients never write here
+    // directly, which stops players from injecting fake events.
+    match /events/{comboKey} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Per-player progress: only the owning account (anonymous or
+    // Google-linked, same uid either way) can read/write its own doc.
+    match /players/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

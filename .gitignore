@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+functions/node_modules/
+
+# Build output
+dist/
+functions/lib/
+*.tsbuildinfo
+
+# Firebase local cache/logs
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+ui-debug.log
+
+# Editor/OS
+.DS_Store
+
+# Claude Code local-only state (machine-specific, not project config)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
