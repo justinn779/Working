@@ -231,7 +231,6 @@ function renderAccountMenu(): string {
   const loggedIn = !!currentUser && isGoogleLinked(currentUser);
   const label = state.playerName || "…";
   return `
-    <button id="language-toggle-btn" class="language-toggle-btn" title="${t("languageToggle")}">${t("languageToggle")}</button>
     <div class="account-menu">
       <button id="account-menu-btn" class="account-badge ${loggedIn ? "account-badge-cloud" : "account-badge-local"}">
         ${loggedIn ? "☁️" : "🔒"} <span class="account-badge-label">${escapeHtml(label)}</span>
@@ -249,6 +248,7 @@ function renderAccountDropdown(loggedIn: boolean): string {
         <span class="account-dropdown-name-value">${escapeHtml(state.playerName || t("notSet"))}</span>
         <button id="edit-name-btn" class="account-name-edit-btn" title="${t("editNameTitle")}">✏️</button>
       </div>
+      <button id="language-toggle-btn" class="account-dropdown-btn">${t("languageToggle")}</button>
       ${
         loggedIn
           ? `<p class="account-dropdown-info">${t("googleSyncedInfo")}</p>

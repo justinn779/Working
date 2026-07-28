@@ -760,22 +760,6 @@ section {
   padding: 24px 0;
 }
 
-.language-toggle-btn {
-  flex: 0 0 auto;
-  border: 1px solid var(--card-border);
-  background: #232734;
-  color: var(--text);
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.language-toggle-btn:hover {
-  border-color: var(--accent);
-}
-
 .account-menu {
   position: relative;
 }
@@ -874,6 +858,10 @@ section {
   color: var(--text);
   font-size: 0.82rem;
   cursor: pointer;
+}
+
+#language-toggle-btn {
+  margin-bottom: 10px;
 }
 
 .account-dropdown-btn:hover {
