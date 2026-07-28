@@ -15,6 +15,16 @@
   box-sizing: border-box;
 }
 
+/* Desktop-only bump: every font-size in this file is in rem, so scaling the
+ * root size scales all of them proportionally instead of editing each rule.
+ * Scoped to wide viewports only — phones/tablets already sized for their
+ * screen and were tuned/tested at the 16px default. */
+@media (min-width: 900px) {
+  html {
+    font-size: 17px;
+  }
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -36,9 +46,10 @@ body {
 
 .app-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 16px;
+  gap: 12px 16px;
   margin-bottom: 20px;
 }
 
@@ -47,6 +58,20 @@ body {
   font-size: 1.6rem;
   letter-spacing: 0.05em;
   white-space: nowrap;
+}
+
+@media (max-width: 380px) {
+  .app-header h1 {
+    font-size: 1.3rem;
+  }
+
+  .stamina-mini {
+    width: 130px;
+  }
+
+  .account-badge-label {
+    max-width: 60px;
+  }
 }
 
 .subtitle {
@@ -334,6 +359,10 @@ section {
   font-size: 0.85rem;
   cursor: pointer;
   transition: all 0.15s ease;
+  /* A longer AI-invented label (up to 12 chars) must never wrap onto a
+   * second line inside a pill shape — it just widens the pill instead,
+   * wrapping as a whole unit within .pill-group's flex-wrap. */
+  white-space: nowrap;
 }
 
 .pill:hover {
@@ -402,8 +431,23 @@ section {
   margin: 0 0 16px;
 }
 
-.result-card {
+/* Wider than the other modals (name/tutorial) since it carries a full story
+ * paragraph, not just a short prompt — 640px keeps line length comfortable
+ * to read without stretching all the way out to .wrap's own 720px, so it
+ * still reads as a distinct dialog rather than the page itself. Shrinks
+ * naturally on narrow viewports via modal-card's own width:100%.
+ * Compound selector (not just .result-modal-card) needed to out-specificity
+ * .modal-card's own max-width, which otherwise wins on source order since
+ * both are single-class selectors of equal specificity. */
+.modal-card.result-modal-card {
+  max-width: 640px;
+}
+
+/* Newly-discovered events get a visibly different frame from repeats —
+ * an accent border + soft glow instead of the modal's default neutral one. */
+.result-modal-card.result-modal-new {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 180, 84, 0.25), 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
 .result-title-row {
@@ -469,10 +513,21 @@ section {
   text-align: center;
 }
 
-.collection-count {
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  text-align: center;
+.tab-nav-badge {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.tab-nav-btn.active .tab-nav-badge {
+  background: rgba(36, 26, 8, 0.18);
 }
 
 .market-notice {
@@ -527,6 +582,70 @@ section {
   cursor: not-allowed;
 }
 
+.history-controls {
+  margin-bottom: 12px;
+}
+
+.history-search {
+  position: relative;
+  margin-bottom: 10px;
+}
+
+.history-search-input {
+  width: 100%;
+  padding: 10px 34px 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border);
+  background: #232734;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.history-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.history-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+}
+
+.history-search-clear:hover {
+  color: var(--text);
+}
+
+.history-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.history-filter-select {
+  flex: 1 1 120px;
+  min-width: 0;
+  border: 1px solid var(--card-border);
+  background: #232734;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 6px 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.history-filter-select:hover {
+  border-color: var(--accent);
+}
+
 .collection-list {
   list-style: none;
   margin: 0;
@@ -543,15 +662,44 @@ section {
 .collection-list li {
   border: 1px solid var(--card-border);
   border-radius: 10px;
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  overflow: hidden;
   background: var(--card);
 }
 
-.collection-list strong {
+.collection-entry-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: none;
+  border: none;
+  color: var(--text);
   font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.collection-entry-toggle:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.collection-entry-title {
+  font-weight: 600;
+}
+
+.collection-entry-chevron {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.collection-entry-details {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .collection-entry-header {
@@ -580,6 +728,7 @@ section {
   border-radius: 999px;
   padding: 2px 10px;
   font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .tag-empty {
@@ -593,10 +742,38 @@ section {
   margin: 0;
 }
 
+.collection-featured {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.collection-discoverer {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
 .collection-empty {
   text-align: center;
   color: var(--text-dim);
   padding: 24px 0;
+}
+
+.language-toggle-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--card-border);
+  background: #232734;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.language-toggle-btn:hover {
+  border-color: var(--accent);
 }
 
 .account-menu {
@@ -648,6 +825,39 @@ section {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+.account-dropdown-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.account-dropdown-name-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.account-dropdown-name-value {
+  font-size: 0.82rem;
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-name-edit-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
 .account-dropdown-info {
   margin: 0 0 10px;
   font-size: 0.78rem;
@@ -676,22 +886,178 @@ section {
   color: var(--accent);
 }
 
-footer {
-  text-align: center;
-  margin-top: 8px;
+.account-dropdown-divider {
+  border: none;
+  border-top: 1px solid var(--card-border);
+  margin: 10px 0;
 }
 
-.reset-btn {
-  background: none;
-  border: 1px solid var(--card-border);
+.account-dropdown-btn-danger {
   color: var(--text-dim);
-  border-radius: 999px;
-  padding: 8px 18px;
-  font-size: 0.8rem;
+}
+
+.account-dropdown-btn-danger:hover {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  /* Extra top padding gives the card breathing room when centered-ish on a
+   * tall screen, while flex-start (not center) + overflow-y:auto means a
+   * short viewport — e.g. a landscape phone with the on-screen keyboard
+   * open — can still scroll to see the whole card instead of clipping it. */
+  padding: 10vh 20px 20px;
+  z-index: 100;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 340px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal-card h2 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.modal-hint {
+  margin: 0 0 16px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.modal-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border);
+  background: #232734;
+  color: var(--text);
+  font-size: 0.95rem;
+  margin-bottom: 16px;
+}
+
+.modal-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-btn-primary {
+  padding: 8px 20px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #241a08;
+  font-weight: 700;
+  font-size: 0.88rem;
   cursor: pointer;
 }
 
-.reset-btn:hover {
-  border-color: var(--bad);
-  color: var(--bad);
+.modal-btn-secondary {
+  padding: 8px 20px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border);
+  background: none;
+  color: var(--text-dim);
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+/* Guided tour: a dimmed full-screen overlay with a bright cutout ring around
+ * the current step's target control, plus a tooltip+arrow pointing at it.
+ * Position/size of the ring and tooltip are computed at runtime in
+ * positionTutorialOverlay() (main.ts) from the target's actual layout, since
+ * that differs across steps and breakpoints — only the visual shell is CSS. */
+.tutorial-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+}
+
+.tutorial-highlight {
+  position: fixed;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  /* Huge spread + high alpha dims everything OUTSIDE this box, while the
+   * box's own interior (over the target) stays clear — no SVG mask needed. */
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+
+.tutorial-tooltip {
+  position: fixed;
+  width: min(280px, calc(100vw - 32px));
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.tutorial-tooltip-step {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.tutorial-tooltip-text {
+  margin: 0 0 14px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.tutorial-tooltip-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.tutorial-skip-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px;
+}
+
+/* Small CSS triangle (border trick): a colored bottom border alone renders
+ * as an upward-pointing triangle, a colored top border as a downward one. */
+.tutorial-arrow {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: 8px solid transparent;
+}
+
+.tutorial-arrow-up {
+  top: -16px;
+  border-bottom-color: var(--card);
+}
+
+.tutorial-arrow-down {
+  bottom: -16px;
+  border-top-color: var(--card);
 }

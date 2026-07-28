@@ -1,13 +1,14 @@
 import { httpsCallable } from "firebase/functions";
-import { getOptionById } from "./combo";
+import { getOptionById, type KnownMaterials } from "./combo";
 import { functions } from "./firebase";
 import { CATEGORY_ORDER } from "./types";
-import type { Category, GameEvent, Selection } from "./types";
+import type { Category, GameEvent, Localized, Selection } from "./types";
 
 interface ResolveEventRequest {
   selection: Selection;
-  labels: Partial<Record<Category, string | null>>;
+  labels: Partial<Record<Category, Localized | null>>;
   durationUnits: number;
+  playerName: string;
 }
 
 const resolveEventCallable = httpsCallable<ResolveEventRequest, GameEvent>(
@@ -21,15 +22,17 @@ const resolveEventCallable = httpsCallable<ResolveEventRequest, GameEvent>(
  * and fall back to the local template generator. */
 export async function generateEventRemote(
   selection: Selection,
-  durationUnits: number
+  durationUnits: number,
+  playerName: string,
+  knownMaterials: KnownMaterials
 ): Promise<GameEvent> {
   const labels = Object.fromEntries(
     CATEGORY_ORDER.map((cat) => [
       cat,
-      selection[cat] ? getOptionById(selection[cat] as string)?.label ?? null : null,
+      selection[cat] ? getOptionById(selection[cat] as string, knownMaterials)?.label ?? null : null,
     ])
-  ) as Partial<Record<Category, string | null>>;
+  ) as Partial<Record<Category, Localized | null>>;
 
-  const result = await resolveEventCallable({ selection, labels, durationUnits });
+  const result = await resolveEventCallable({ selection, labels, durationUnits, playerName });
   return result.data;
 }
