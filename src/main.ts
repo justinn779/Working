@@ -99,6 +99,12 @@ let insufficientStaminaFlash = false;
  * nothing happened and that trying again is the right move. */
 let generationFailedFlash = false;
 let isResolving = false;
+/** Units above which starting an event needs an extra confirmation tap —
+ * 6 units = 60 minutes, easy to bump past accidentally while dragging the
+ * time slider, and the AI generation can't be cancelled once started. */
+const LONG_DURATION_CONFIRM_THRESHOLD_UNITS = 6;
+let longDurationConfirmOpen = false;
+let pendingResolveDuration: number | null = null;
 let currentUser: User | null = null;
 let syncNotice: string | null = null;
 let view: View = "play";
@@ -517,6 +523,7 @@ function render() {
     ${nameModalOpen ? renderNameModal() : !nameModalOpen && announcementModalOpen ? renderAnnouncementModal() : ""}
     ${tutorialStep !== null ? renderTutorialOverlay() : ""}
     ${resultModalOpen ? renderResultModal() : ""}
+    ${longDurationConfirmOpen ? renderLongDurationConfirmModal() : ""}
   `;
 
   attachTabNavHandlers();
@@ -618,6 +625,22 @@ function renderNameModal(): string {
         <div class="modal-actions">
           ${nameModalCanCancel ? `<button id="name-cancel-btn" class="modal-btn-secondary">${t("cancel")}</button>` : ""}
           <button id="name-confirm-btn" class="modal-btn-primary">${t("confirm")}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLongDurationConfirmModal(): string {
+  const units = pendingResolveDuration ?? durationUnits;
+  return `
+    <div class="modal-backdrop">
+      <div class="modal-card">
+        <h2>${t("longDurationConfirmTitle")}</h2>
+        <p class="modal-hint">${t("longDurationConfirmBody", { duration: formatDuration(units) })}</p>
+        <div class="modal-actions">
+          <button id="long-duration-cancel-btn" class="modal-btn-secondary">${t("cancel")}</button>
+          <button id="long-duration-confirm-btn" class="modal-btn-primary">${t("confirm")}</button>
         </div>
       </div>
     </div>
@@ -1455,6 +1478,26 @@ function attachHistoryHandlers() {
   });
 }
 
+async function performResolve(effectiveDuration: number) {
+  isResolving = true;
+  render();
+  const outcome = await resolveAction(state, selection, effectiveDuration);
+  isResolving = false;
+  if (!outcome.ok) {
+    if (outcome.reason === "insufficient-stamina") insufficientStaminaFlash = true;
+    else generationFailedFlash = true;
+    render();
+    return;
+  }
+  lastResult = outcome.result;
+  resultModalOpen = true;
+  // 素材選擇每次事件後自動回歸預設,時間長度則保留給下一次沿用。
+  selection = emptySelection();
+  resultStale = false;
+  persist();
+  render();
+}
+
 function attachPlayHandlers() {
   app.querySelectorAll<HTMLButtonElement>(".pill").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1522,22 +1565,25 @@ function attachPlayHandlers() {
     if (!hasAnySelection(selection) || isResolving) return;
     const effectiveDuration = Math.min(durationUnits, maxSelectableUnits());
     if (effectiveDuration <= 0) return;
-    isResolving = true;
-    render();
-    const outcome = await resolveAction(state, selection, effectiveDuration);
-    isResolving = false;
-    if (!outcome.ok) {
-      if (outcome.reason === "insufficient-stamina") insufficientStaminaFlash = true;
-      else generationFailedFlash = true;
+    if (effectiveDuration > LONG_DURATION_CONFIRM_THRESHOLD_UNITS) {
+      pendingResolveDuration = effectiveDuration;
+      longDurationConfirmOpen = true;
       render();
       return;
     }
-    lastResult = outcome.result;
-    resultModalOpen = true;
-    // 素材選擇每次事件後自動回歸預設,時間長度則保留給下一次沿用。
-    selection = emptySelection();
-    resultStale = false;
-    persist();
+    await performResolve(effectiveDuration);
+  });
+
+  document.querySelector<HTMLButtonElement>("#long-duration-confirm-btn")?.addEventListener("click", async () => {
+    longDurationConfirmOpen = false;
+    const duration = pendingResolveDuration;
+    pendingResolveDuration = null;
+    render();
+    if (duration) await performResolve(duration);
+  });
+  document.querySelector<HTMLButtonElement>("#long-duration-cancel-btn")?.addEventListener("click", () => {
+    longDurationConfirmOpen = false;
+    pendingResolveDuration = null;
     render();
   });
 }

@@ -75,6 +75,11 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
     zh: "工時不夠支撐這段時間,已自動調整。",
     en: "Not enough work hours for that long — automatically adjusted.",
   },
+  longDurationConfirmTitle: { zh: "確認花費時間", en: "Confirm Time Spent" },
+  longDurationConfirmBody: {
+    zh: "這次要花費 {duration},確定要開始嗎?",
+    en: "This will take {duration} — are you sure you want to start?",
+  },
   generationFailedWarning: {
     zh: "生成失敗,已重試多次仍無法連上,工時已退回,請稍後再試一次。",
     en: "Generation failed even after retrying — your work hours have been refunded. Please try again later.",
