@@ -2,6 +2,20 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Membership check for the admin dashboard. Reads a single doc by uid
+    // (cheap, no query) — standard pattern for role checks in Firestore
+    // rules. Admins get broad READ access below for the dashboard's data
+    // browser, but writes to anything money/ledger-related stay `false`
+    // even for admins: those must go through the audited Cloud Functions
+    // (adminRefundOrder/adminAdjustCoins/adminSetPaymentReview/
+    // adminReconcile in functions/src/adminHandlers.ts), which run the
+    // proper transactions and always append an adminActions log entry.
+    // Only non-financial reference content (products, announcements) is
+    // opened up for direct admin writes below.
+    function isAdmin() {
+      return request.auth != null && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
     // Shared, append-only event cache: anyone can read (so cached events
     // stay usable offline-ish/client-side), but only the Cloud Function
     // (admin SDK, bypasses rules) may write — clients never write here
@@ -12,9 +26,87 @@ service cloud.firestore {
     }
 
     // Per-player progress: only the owning account (anonymous or
-    // Google-linked, same uid either way) can read/write its own doc.
+    // Google-linked, same uid either way) can read/write its own doc, plus
+    // admin read for the dashboard's player lookup.
+    // NOTE: this still allows the client to write paidCoinBalance directly
+    // — that field is only ever *meant* to be written by Cloud Functions
+    // (Admin SDK bypasses rules entirely), but this rule doesn't itself
+    // stop a malicious client from writing it. Do not treat a wallet
+    // balance read here as trustworthy for anything security-sensitive;
+    // the ledger + order documents are the source of truth and are never
+    // client-writable (see below) — not even by an admin's own client.
     match /players/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
+      allow write: if request.auth != null && request.auth.uid == uid;
+
+      // Append-only wallet ledger: the owning player or an admin may read;
+      // only Cloud Functions (Admin SDK) may ever write an entry.
+      match /ledger/{ledgerId} {
+        allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
+        allow write: if false;
+      }
+    }
+
+    // Top-up product catalog: public read (so the market page can list
+    // prices without auth). Admins may edit directly — this is plain
+    // catalog/reference content, not money-movement, so it doesn't need to
+    // go through an audited transaction the way orders/wallet do.
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Modal announcement shown on load: public read (players see it before
+    // any auth-gated action), admin-direct-write since it's just content.
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Top-up orders: a player may read only their own orders (created via
+    // the createTopupOrder callable); admins may read any for the
+    // dashboard. Never client-writable, including by admins — amount/
+    // coins/status are only ever decided server-side, and changing them
+    // must go through adminRefundOrder/captureAndCredit's own transactions
+    // so the ledger and paypalCaptures guards stay consistent.
+    match /orders/{orderId} {
+      allow read: if request.auth != null && (request.auth.uid == resource.data.userId || isAdmin());
+      allow write: if false;
+    }
+
+    // Internal bookkeeping the client has no legitimate reason to ever
+    // write: PayPal order-id/capture-id uniqueness markers. Admins can read
+    // paypalCaptures for debugging a specific capture; the index itself has
+    // no diagnostic value on its own.
+    match /paypalOrderIndex/{paypalOrderId} {
+      allow read, write: if false;
+    }
+    match /paypalCaptures/{captureId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /webhookLogs/{eventId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /disputes/{disputeId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Admin allowlist: a user may check whether *they themselves* are an
+    // admin (that's how the dashboard bootstraps its own gate) but never
+    // enumerate or write the allowlist from the client.
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Audit log of admin actions: admin-read-only, never client-writable —
+    // only the Cloud Functions that perform an audited action append to it.
+    match /adminActions/{actionId} {
+      allow read: if isAdmin();
+      allow write: if false;
     }
   }
 }

@@ -19,3 +19,6 @@ ui-debug.log
 # Claude Code local-only state (machine-specific, not project config)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Per-machine function config (non-secret values, but env files vary per deploy target)
+functions/.env

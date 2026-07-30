@@ -30,7 +30,37 @@ export interface GameState {
   /** Whether the one-time gameplay tutorial has been shown — fires once,
    * right after the player sets their 入職名稱 for the very first time. */
   hasSeenTutorial: boolean;
+  /** Read-only mirror of the player's PayPal top-up wallet
+   * (players/{uid}.paidCoinBalance in Firestore). Only Cloud Functions ever
+   * change the real balance — this local copy exists purely for display and
+   * is refreshed from cloudSync's pullRemoteState; nothing in this file
+   * mutates it, and pushRemoteState must never send it back to the server
+   * (see cloudSync.ts's toSyncedProfile). */
+  wallet: { paidCoinBalance: number };
+  /** Epoch ms of when the player confirmed the top-up terms/consent modal —
+   * null means never. Shown once (gates the first purchase), not required
+   * again on every later purchase; the market page keeps a "查看條款" link
+   * to reopen the same modal read-only at any time. */
+  consentAcceptedAt: number | null;
+  /** id of the last admin announcement (see src/types.ts's Announcement)
+   * this player permanently dismissed via "不再顯示" — null means none.
+   * Only meaningful for a `dismissible` announcement; a non-dismissible one
+   * always shows regardless of this value. */
+  dismissedAnnouncementId: string | null;
+  /** Current 職稱 (job title) — starts at DEFAULT_JOB_TITLE, moves forward
+   * only when a generated event's `newJobTitle` says so (see
+   * eventEngine.ts's resolveAction and functions/src/index.ts's buildPrompt).
+   * Covers both promotion within the same job (新進員工→主管→CEO) and a
+   * switch to a different job entirely — the game treats both as the same
+   * kind of change. Baked into every new event's comboKey, so the same
+   * materials tell a different story depending on this. */
+  jobTitle: Localized;
 }
+
+/** Every player starts here — a blank-slate office worker with nothing
+ * decided yet. Exported so cloudSync.ts can fall back to the same value for
+ * a pre-existing remote profile that predates this field. */
+export const DEFAULT_JOB_TITLE: Localized = { zh: "新進員工", en: "New Employee" };
 
 /** Whether a save already exists — checked *before* loadState() so the
  * caller (main.ts) knows whether to run first-visit navigator.language
@@ -52,6 +82,10 @@ function freshState(): GameState {
     playerName: "",
     knownMaterials: {},
     hasSeenTutorial: false,
+    wallet: { paidCoinBalance: 0 },
+    consentAcceptedAt: null,
+    dismissedAnnouncementId: null,
+    jobTitle: DEFAULT_JOB_TITLE,
   };
 }
 
@@ -91,6 +125,28 @@ export function loadState(): GameState {
     // genuinely first-ever visit (no save at all) gets navigator-detected.
     if (parsed.language !== "zh" && parsed.language !== "en") {
       parsed.language = "zh";
+    }
+    // Older saves predate the top-up wallet — default to zero rather than
+    // wiping otherwise-valid progress. A real balance (if any) is restored
+    // moments later for Google-linked players via cloudSync's pullRemoteState.
+    if (typeof parsed.wallet !== "object" || parsed.wallet === null) {
+      parsed.wallet = { paidCoinBalance: 0 };
+    }
+    // Older saves predate the consent modal — default to "never accepted"
+    // so returning players still see it once before their first purchase.
+    if (typeof parsed.consentAcceptedAt !== "number") {
+      parsed.consentAcceptedAt = null;
+    }
+    // Older saves predate the announcement system — default to "nothing
+    // dismissed yet", which just means the next active announcement (if
+    // any) will show once, same as for a brand-new player.
+    if (typeof parsed.dismissedAnnouncementId !== "string") {
+      parsed.dismissedAnnouncementId = null;
+    }
+    // Older saves predate the job-title system — default to the same
+    // starting title a brand-new player gets, rather than wiping progress.
+    if (typeof parsed.jobTitle !== "object" || parsed.jobTitle === null || typeof parsed.jobTitle.zh !== "string") {
+      parsed.jobTitle = DEFAULT_JOB_TITLE;
     }
     // Defensive clamp: a save from before MAX_STAMINA_UNITS was lowered
     // could otherwise show e.g. "144 / 48".

@@ -1,99 +1,7 @@
-import { UNIT_MINUTES } from "./config";
-import { buildComboKey, durationBucket, getOptionById, isEmptySelection, type KnownMaterials } from "./combo";
+import { buildComboKey } from "./combo";
 import { generateEventRemote } from "./remoteEvent";
 import { recordEvent, spendStamina, unlockOption, type GameState } from "./state";
-import { CATEGORY_ORDER } from "./types";
-import type { Category, GameEvent, Selection } from "./types";
-
-const CONNECTOR: Record<"zh" | "en", Record<Category, string>> = {
-  zh: { person: "和", matter: "處理", place: "在", object: "靠著" },
-  en: { person: "with", matter: "on", place: "at", object: "using" },
-};
-
-const CLOSERS_BY_LENGTH: Record<"zh" | "en", Record<"short" | "medium" | "long", string[]>> = {
-  zh: {
-    short: ["很快就解決了。", "算是輕鬆過關。", "沒花多少功夫。"],
-    medium: ["過程有點小曲折,但總算收場。", "比想像中麻煩一點,不過還好。", "中間出了點小插曲,幸好沒釀成大事。"],
-    long: ["這段時間過得特別漫長,總算是熬過去了。", "花了不少心力才告一段落。", "過程一波三折,結束時整個人都累了。"],
-  },
-  en: {
-    short: ["It wrapped up quickly.", "A pretty easy win.", "Didn't take much effort."],
-    medium: [
-      "It got a little complicated, but wrapped up in the end.",
-      "A bit more trouble than expected, but okay.",
-      "There was a small hiccup, but nothing serious came of it.",
-    ],
-    long: [
-      "It dragged on for a while, but got through it eventually.",
-      "Took a lot of effort to finally wrap up.",
-      "It was a bumpy ride, and everyone was exhausted by the end.",
-    ],
-  },
-};
-
-/** Local, rule-based fallback used only when the Cloud Function is
- * unreachable (offline, not yet deployed, etc). It deliberately never
- * features/unlocks anything — that's meant to track what the AI actually
- * wove into a story, and a template like this can't guarantee that
- * coherence. It also only mentions categories the player actually selected,
- * matching the same "don't invent unselected filler" rule the AI prompt
- * follows. Never touches the shared library, so there's no real "discoverer"
- * — the placeholder name makes that visible rather than implying a global
- * discovery that didn't happen.
- *
- * Builds both languages at once (no AI available here to translate on
- * demand), same as the remote generator, so switching the UI language never
- * needs to regenerate this event. */
-function generateEventLocal(
-  selection: Selection,
-  durationUnits: number,
-  comboKey: string,
-  playerName: string,
-  knownMaterials: KnownMaterials,
-  uiLanguage: "zh" | "en"
-): GameEvent {
-  const minutes = durationUnits * UNIT_MINUTES;
-  const selectedCats = CATEGORY_ORDER.filter((cat) => selection[cat] !== null);
-  const bucket = durationBucket(durationUnits);
-  const closerIndex = Math.floor(Math.random() * CLOSERS_BY_LENGTH.zh[bucket].length);
-
-  const label = (cat: Category, lang: "zh" | "en") =>
-    getOptionById(selection[cat] as string, knownMaterials)?.label[lang] ?? "";
-
-  const actorZh = playerName || "你";
-  const actorEn = playerName || "You";
-  const fragmentsZh = selectedCats.map((cat) => `${CONNECTOR.zh[cat]}${label(cat, "zh")}`);
-  const fragmentsEn = selectedCats.map((cat) => `${CONNECTOR.en[cat]}${label(cat, "en")}`);
-
-  const bodyZh =
-    fragmentsZh.length > 0
-      ? `${actorZh}花了${minutes}分鐘,${fragmentsZh.join("、")}。`
-      : `${actorZh}自己找了件事花了${minutes}分鐘處理。`;
-  const bodyEn =
-    fragmentsEn.length > 0
-      ? `${actorEn} spent ${minutes} minutes ${fragmentsEn.join(", ")}.`
-      : `${actorEn} found something to do for ${minutes} minutes.`;
-
-  const titleZh = isEmptySelection(selection)
-    ? "平凡的一段工作時間"
-    : selectedCats.map((cat) => label(cat, "zh")).join("・");
-  const titleEn = isEmptySelection(selection)
-    ? "An Ordinary Work Session"
-    : selectedCats.map((cat) => label(cat, "en")).join(" · ");
-
-  return {
-    comboKey,
-    title: { zh: titleZh, en: titleEn },
-    description: {
-      zh: `${bodyZh}${CLOSERS_BY_LENGTH.zh[bucket][closerIndex]}`,
-      en: `${bodyEn} ${CLOSERS_BY_LENGTH.en[bucket][closerIndex]}`,
-    },
-    durationUnits,
-    featuredOption: null,
-    discovererName: playerName || (uiLanguage === "en" ? "You (offline mode)" : "你(本機模式)"),
-    discoveredAt: Date.now(),
-  };
-}
+import type { GameEvent, Localized, Selection } from "./types";
 
 export interface ResolveResult {
   event: GameEvent;
@@ -104,31 +12,81 @@ export interface ResolveResult {
   isFeaturedOptionNewToMe: boolean;
   /** Where this event's content came from this time around — 'cached' means
    * it was already known locally and no generation happened at all. */
-  source: "cached" | "remote" | "local-fallback";
+  source: "cached" | "remote";
+  /** Set to the new title only when this event actually moved
+   * state.jobTitle forward (promotion or a switch to a different job) —
+   * null otherwise. Gates the "🎉 職稱異動" toast the same way
+   * isFeaturedOptionNewToMe gates the material-unlock one. */
+  jobTitleChanged: Localized | null;
 }
 
-/** Returns null when there isn't enough stamina to cover the requested duration. */
+/** Discriminated outcome instead of the old `ResolveResult | null` — there
+ * are now two distinct ways this can fail (not enough stamina vs. the AI
+ * genuinely never responded even after retrying), and the caller needs to
+ * tell them apart to show the right message. */
+export type ResolveOutcome =
+  | { ok: true; result: ResolveResult }
+  | { ok: false; reason: "insufficient-stamina" | "generation-failed" };
+
+/** Milliseconds to wait between retries — short, then longer, so a genuine
+ * one-off blip resolves fast without hammering the function relentlessly. */
+const RETRY_DELAYS_MS = [800, 1500, 3000];
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** There is deliberately no local fallback generator — a story with no AI
+ * behind it can't guarantee the "the new material must actually appear in
+ * the text" invariant the rest of the game relies on (see
+ * functions/src/index.ts's tryGenerate), so a failed generation must
+ * actually fail and let the player retry, rather than silently substituting
+ * a lesser experience that skips that guarantee. Tries once, then up to
+ * RETRY_DELAYS_MS.length more times with backoff before giving up. */
+async function generateWithRetry(
+  selection: Selection,
+  durationUnits: number,
+  state: GameState
+): Promise<GameEvent | null> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await generateEventRemote(
+        selection,
+        durationUnits,
+        state.playerName,
+        state.knownMaterials,
+        state.jobTitle
+      );
+    } catch (err) {
+      console.warn(`雲端事件生成失敗(第 ${attempt + 1} 次嘗試)`, err);
+      if (attempt >= RETRY_DELAYS_MS.length) return null;
+      await delay(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 export async function resolveAction(
   state: GameState,
   selection: Selection,
   durationUnits: number
-): Promise<ResolveResult | null> {
-  if (!spendStamina(state, durationUnits)) return null;
+): Promise<ResolveOutcome> {
+  if (!spendStamina(state, durationUnits)) return { ok: false, reason: "insufficient-stamina" };
 
-  const comboKey = buildComboKey(selection, durationUnits);
+  const comboKey = buildComboKey(selection, durationUnits, state.jobTitle.zh);
   const cached = state.eventsByCombo[comboKey];
   let event = cached;
   let source: ResolveResult["source"] = "cached";
 
   if (!event) {
-    try {
-      event = await generateEventRemote(selection, durationUnits, state.playerName, state.knownMaterials);
-      source = "remote";
-    } catch (err) {
-      console.warn("雲端事件生成失敗,改用本機規則產生", err);
-      event = generateEventLocal(selection, durationUnits, comboKey, state.playerName, state.knownMaterials, state.language);
-      source = "local-fallback";
+    const generated = await generateWithRetry(selection, durationUnits, state);
+    if (!generated) {
+      // Nothing was produced — refund the stamina we speculatively spent
+      // rather than charging the player for a failed attempt.
+      state.staminaUnits += durationUnits;
+      return { ok: false, reason: "generation-failed" };
     }
+    event = generated;
+    source = "remote";
   }
 
   const { isNewDiscovery } = recordEvent(state, event);
@@ -137,5 +95,15 @@ export async function resolveAction(
     ? unlockOption(state, event.featuredOption.optionId)
     : false;
 
-  return { event, isNewDiscovery, isFeaturedOptionNewToMe, source };
+  // Same decision every time this exact comboKey resolves (it's baked into
+  // the cached event) — harmless to re-apply on a repeat visit, since once
+  // jobTitle actually moves, the old comboKey (built from the old title)
+  // can never be reached again through normal play.
+  let jobTitleChanged: Localized | null = null;
+  if (event.newJobTitle && event.newJobTitle.zh !== state.jobTitle.zh) {
+    state.jobTitle = event.newJobTitle;
+    jobTitleChanged = event.newJobTitle;
+  }
+
+  return { ok: true, result: { event, isNewDiscovery, isFeaturedOptionNewToMe, source, jobTitleChanged } };
 }

@@ -7,9 +7,13 @@ export type LanguageCode = "zh" | "en";
  * names are always a matched pair, never independently translated. */
 const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   appTitle: { zh: "職場大小事", en: "Workplace Big & Small" },
-  staminaLabel: { zh: "體力", en: "Stamina" },
-  staminaFull: { zh: "體力全滿", en: "Stamina full" },
+  staminaLabel: { zh: "工時", en: "Work Hours" },
+  staminaFull: { zh: "工時全滿", en: "Work hours full" },
   regenCountdown: { zh: "{time} 後 +1", en: "+1 in {time}" },
+  currencyLabel: { zh: "加班費", en: "OT Pay" },
+  jobTitleLabel: { zh: "職稱", en: "Job Title" },
+  jobTitleChangedTitle: { zh: "🎉 職稱異動", en: "🎉 Job Title Changed" },
+  jobTitleChangedBody: { zh: "你現在是「{title}」了。", en: "You are now a {title}." },
 
   notSet: { zh: "未設定", en: "Not set" },
   editNameTitle: { zh: "編輯入職名稱", en: "Edit Display Name" },
@@ -19,7 +23,7 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   signOut: { zh: "登出", en: "Sign Out" },
   localOnlyInfo: { zh: "目前資料只存在這個裝置", en: "Your data only exists on this device" },
   googleSignIn: { zh: "登入 Google 帳號以同步進度", en: "Sign in with Google to sync progress" },
-  resetProgress: { zh: "重置遊戲進度", en: "Reset Game Progress" },
+  deleteAccount: { zh: "刪除帳號", en: "Delete Account" },
   languageToggle: { zh: "EN", en: "中" },
 
   nameModalHint: {
@@ -47,8 +51,8 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
     en: "Press Start — the system generates a workplace event and unlocks a new material along the way.",
   },
   tutorialStep4: {
-    zh: "體力代表你還能花的時間,用完後會隨時間慢慢恢復,倒數顯示在這裡。",
-    en: "Stamina is how much time you can still spend. It slowly regenerates over time — the countdown shows here.",
+    zh: "工時代表你還能花的時間,用完後會隨時間慢慢恢復,倒數顯示在這裡。",
+    en: "Work hours represent how much time you can still spend. They slowly regenerate over time — the countdown shows here.",
   },
   tutorialStep5: {
     zh: "「歷史」頁收藏你發現過的所有事件,去收集更多獨特組合吧!",
@@ -60,7 +64,7 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   tabMarket: { zh: "市集", en: "Market" },
 
   resolvingLabel: { zh: "生成中…", en: "Generating…" },
-  staminaInsufficientLabel: { zh: "體力不足", en: "Not Enough Stamina" },
+  staminaInsufficientLabel: { zh: "工時不足", en: "Not Enough Work Hours" },
   pleaseSelectLabel: { zh: "請選擇", en: "Please Select" },
   startLabel: { zh: "開始", en: "Start" },
   duplicateHint: {
@@ -68,10 +72,21 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
     en: "🔁 You've already tried this combination — the result will be the same.",
   },
   insufficientStaminaWarning: {
-    zh: "體力不夠支撐這段時間,已自動調整。",
-    en: "Not enough stamina for that long — automatically adjusted.",
+    zh: "工時不夠支撐這段時間,已自動調整。",
+    en: "Not enough work hours for that long — automatically adjusted.",
+  },
+  generationFailedWarning: {
+    zh: "生成失敗,已重試多次仍無法連上,工時已退回,請稍後再試一次。",
+    en: "Generation failed even after retrying — your work hours have been refunded. Please try again later.",
   },
   unselected: { zh: "未選", en: "Unselected" },
+  youFallback: { zh: "你", en: "You" },
+
+  allMaterialsHint: { zh: "顯示全部素材,點上方任一格可篩選單一類別", en: "Showing all materials — tap a slot above to filter by one category" },
+  filteredByHint: { zh: "只顯示「{category}」,再點一次取消篩選", en: "Showing only \"{category}\" — tap again to clear" },
+  sortByLabelBtn: { zh: "文字排序", en: "By Name" },
+  sortByUnlockOrderBtn: { zh: "獲得順序", en: "By Unlock Order" },
+  noUnlockedMaterials: { zh: "目前沒有可選的素材", en: "No materials unlocked yet" },
 
   firstDiscovery: { zh: "首次發現", en: "First Discovery" },
   repeatEvent: { zh: "重複事件", en: "Repeat Event" },
@@ -91,16 +106,61 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   clearSearchTitle: { zh: "清除搜尋", en: "Clear search" },
   filterAllOption: { zh: "{category}:全部", en: "{category}: All" },
 
-  marketNotice: {
-    zh: "儲值功能還在準備中,金流串接完成後就能在這裡直接購買體力。",
-    en: "Top-ups are still being set up — once payment is connected, you'll be able to buy stamina here.",
-  },
   unitsSuffix: { zh: "{n} 單位", en: "{n} Units" },
   notAvailable: { zh: "尚未開放", en: "Not Available Yet" },
 
-  confirmResetProgress: {
-    zh: "確定要重置所有遊戲進度嗎?這會清除已收集的事件與解鎖的選項,且無法復原。",
-    en: "Are you sure you want to reset all game progress? This will erase your collected events and unlocked options, and cannot be undone.",
+  marketGoogleGateTitle: { zh: "儲值前請先連結 Google 帳號", en: "Link a Google account before topping up" },
+  marketGoogleGateBody: {
+    zh: "純本機帳號一旦清除瀏覽器資料就會遺失,已付費的加班費也會跟著不見。連結 Google 帳號後,加班費才能安全地跨裝置保存。",
+    en: "A local-only account is lost the moment browser data is cleared — including any overtime pay you've paid for. Link a Google account first so your balance is safely kept across devices.",
+  },
+
+  marketWalletPaid: { zh: "加班費餘額", en: "Overtime Pay Balance" },
+  marketExchangeAllBtn: { zh: "全部兌換成工時", en: "Exchange All for Work Hours" },
+  marketExchangeNote: { zh: "1 加班費 = 1 單位工時。", en: "1 overtime pay = 1 work-hour unit." },
+  marketExchangeNone: { zh: "目前沒有加班費可以兌換", en: "No overtime pay to exchange yet" },
+  marketExchangeFailed: { zh: "兌換失敗,請稍後再試", en: "Exchange failed — please try again later" },
+
+  marketBuyBtn: { zh: "購買", en: "Buy" },
+  viewTermsLink: { zh: "查看服務條款與儲值規則", en: "View Terms & Top-up Rules" },
+  consentModalTitle: { zh: "儲值前請詳閱", en: "Please Review Before Topping Up" },
+  consentModalBody: {
+    zh: "同意服務條款與儲值/退款規則,並瞭解加班費僅能在遊戲內使用、不可轉讓或兌換為現金。首次購買前需按下方按鈕確認,之後不用再重複確認,但你隨時可以透過商店頁的連結重新查看這份說明。",
+    en: "By agreeing you accept the Terms of Service and the top-up/refund rules, and understand overtime pay is usable only in-game and cannot be transferred or cashed out. This confirmation is only needed once, before your first purchase — you can reopen this notice anytime from a link on the shop page.",
+  },
+  consentAgreeBtn: { zh: "我同意並繼續", en: "I Agree, Continue" },
+  marketProcessing: { zh: "處理中,請稍候…", en: "Processing, please wait…" },
+  marketCancelBtn: { zh: "取消", en: "Cancel" },
+  marketSuccessTitle: { zh: "🎉 購買成功", en: "🎉 Purchase Successful" },
+  marketSuccessBody: { zh: "已加入 {paid} 點加班費。", en: "{paid} overtime pay added." },
+  marketFailedTitle: { zh: "付款失敗", en: "Payment Failed" },
+  marketRetryBtn: { zh: "重新購買", en: "Try Again" },
+  marketCancelledTitle: { zh: "已取消", en: "Cancelled" },
+  marketBackBtn: { zh: "返回商店", en: "Back to Shop" },
+  marketPendingTitle: { zh: "確認中", en: "Confirming" },
+  marketPendingBody: {
+    zh: "付款已收到,加班費正在確認中,請勿重複付款。",
+    en: "Payment received, your overtime pay is being confirmed. Please do not pay again.",
+  },
+  marketPendingOrderLabel: { zh: "訂單編號:{orderId}", en: "Order ID: {orderId}" },
+  marketRecheckBtn: { zh: "重新查詢狀態", en: "Check Status Again" },
+
+  supportContactTitle: { zh: "需要協助?", en: "Need Help?" },
+  supportContactBody: {
+    zh: "付款或加班費相關問題,請透過以下信箱聯絡客服,並附上訂單相關資訊。",
+    en: "For payment or overtime pay issues, please contact customer service at the email below with your order details.",
+  },
+  marketLoadError: { zh: "商品清單載入失敗,請稍後再試", en: "Failed to load products — please try again later" },
+
+  announcementDismissForeverLabel: { zh: "不再顯示這則公告", en: "Don't show this again" },
+
+  confirmDeleteAccountLocal: {
+    zh: "確定要刪除帳號嗎?這會清除這個裝置上已收集的事件與解鎖的選項,且無法復原。",
+    en: "Are you sure you want to delete your account? This will erase your collected events and unlocked options on this device, and cannot be undone.",
+  },
+  confirmDeleteAccountCloud: {
+    zh: "確定要刪除帳號嗎?這會永久刪除雲端的進度資料、清除這個裝置上的本機資料,並將你登出,且無法復原。",
+    en: "Are you sure you want to delete your account? This will permanently delete your cloud progress, clear local data on this device, and sign you out — this cannot be undone.",
   },
   confirmSignOut: {
     zh: "登出後這個裝置會改回本機模式,之後的進度不會再同步到雲端(這台裝置上的本機資料會保留)。確定要登出嗎?",

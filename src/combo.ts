@@ -1,4 +1,3 @@
-import { UNIT_MINUTES } from "./config";
 import { SEED_OPTIONS } from "./data/options";
 import { CATEGORY_LABEL, CATEGORY_ORDER } from "./types";
 import type { Category, GameOption, Localized, Selection } from "./types";
@@ -60,24 +59,26 @@ export function getOptionById(id: string, knownMaterials?: KnownMaterials): Game
   return legacy ? { id, category: legacy.category, label: legacy.label } : undefined;
 }
 
-/** Bucketed story-length hint (used only for flavor text in the local
- * fallback generator, e.g. picking a "quick" vs "exhausting" closing line —
- * NOT used for comboKey uniqueness, which cares about the exact unit count. */
-export function durationBucket(durationUnits: number): "short" | "medium" | "long" {
-  const minutes = durationUnits * UNIT_MINUTES;
-  if (minutes <= 20) return "short";
-  if (minutes <= 60) return "medium";
-  return "long";
+/** Strips characters that would corrupt comboKey parsing (`|` separates
+ * segments, `:` separates a segment's category from its value) — mirrors
+ * functions/src/index.ts's copy exactly. A job title is free text (GPT can
+ * invent one, same as a material), so it needs the same guard a material
+ * name gets before going into the key. */
+function sanitizeForId(label: string): string {
+  return label.replace(/[|:]/g, "");
 }
 
 /** Deterministic cache key for a combo — category order is fixed so equal
  * selections always produce the same key regardless of pick order. Duration
  * is included as the exact unit count (not a bucket) — every distinct
- * duration choice is its own discoverable event. Must match
+ * duration choice is its own discoverable event. The player's current job
+ * title is also part of the key — the same materials tell a different,
+ * separately-cached story depending on what job the acting player currently
+ * holds (see functions/src/index.ts's buildPrompt). Must match
  * functions/src/index.ts's copy exactly. */
-export function buildComboKey(selection: Selection, durationUnits: number): string {
+export function buildComboKey(selection: Selection, durationUnits: number, jobTitleZh: string): string {
   const base = CATEGORY_ORDER.map((cat) => `${cat}:${selection[cat] ?? "none"}`).join("|");
-  return `${base}|time:${durationUnits}`;
+  return `${base}|time:${durationUnits}|job:${sanitizeForId(jobTitleZh)}`;
 }
 
 export function isEmptySelection(selection: Selection): boolean {

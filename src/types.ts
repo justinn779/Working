@@ -10,6 +10,15 @@ export interface Localized {
   en: string;
 }
 
+/** Story text (title/description) never contains a real name — the AI writes
+ * this literal token wherever the protagonist would be named (see
+ * functions/src/index.ts's buildPrompt), and the frontend substitutes the
+ * *viewing* player's own name at display time (see main.ts's personalize()).
+ * A shared event replayed by a different player therefore always reads as
+ * "you", never as whoever originally discovered it — that's what
+ * `discovererName` is for instead. Must match the backend's copy exactly. */
+export const PLAYER_TOKEN = "{{player}}";
+
 export const CATEGORY_LABEL: Record<Category, Localized> = {
   person: { zh: "人", en: "Person" },
   matter: { zh: "事", en: "Matter" },
@@ -47,6 +56,20 @@ export interface GameEvent {
   discovererName: string;
   /** When this combo was first ever generated, globally (not per-player). */
   discoveredAt: number;
+  /** The acting player's 職稱 (job title) *before* this event — baked into
+   * the comboKey (see combo.ts's buildComboKey), so the same materials
+   * produce a different cached story for a different job title. Stored
+   * directly on the event (like durationUnits) so it can be displayed
+   * without re-decoding the key. */
+  jobTitle: Localized;
+  /** GPT's decision on whether this event should change the acting player's
+   * job title going forward (promotion within the same job, or a switch to
+   * a different one entirely) — null means no change. Since this is baked
+   * into the cached event, it applies identically to every player who ever
+   * resolves this exact combo from this exact starting job title — that's
+   * consistent with how the rest of the shared-discovery model already
+   * works, not a special case. */
+  newJobTitle: Localized | null;
 }
 
 export interface Selection {
@@ -54,4 +77,23 @@ export interface Selection {
   matter: string | null;
   place: string | null;
   object: string | null;
+}
+
+/** Admin-authored modal shown on load (see admin.html). `id` is regenerated
+ * every time an admin saves the announcement (even for a small edit) — this
+ * is a deliberate simplification over versioning "is this really new
+ * content": re-showing it once after any edit is a safe default, and it
+ * keeps the dismissal-tracking logic on the player side trivial (just
+ * compare ids). Lives in Firestore's `announcements/current` doc, publicly
+ * readable, only admin-writable (see firestore.rules). */
+export interface Announcement {
+  id: string;
+  title: Localized;
+  body: Localized;
+  enabled: boolean;
+  /** false = shows on every single load with no way to permanently
+   * dismiss it (just a close button); true = the modal also offers a
+   * "don't show again" checkbox that persists past this id. */
+  dismissible: boolean;
+  updatedAt: number;
 }

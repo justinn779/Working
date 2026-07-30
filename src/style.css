@@ -5,10 +5,15 @@
   --card-border: #2c3040;
   --text: #eef0f5;
   --text-dim: #9aa0b4;
-  --accent: #ffb454;
-  --accent-dim: #7c5a2a;
+  --accent: #93c2a4;
+  --accent-dim: #2f6b4f;
+  --accent-text: #173321;
   --good: #6fd08c;
   --bad: #e08585;
+  --cat-person: #ff9f5a;
+  --cat-matter: #bb9af7;
+  --cat-place: #7dcfff;
+  --cat-object: #d1a0b3;
 }
 
 * {
@@ -92,6 +97,21 @@ body {
   width: 160px;
 }
 
+.header-currency {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
 .stamina-mini-row {
   display: flex;
   justify-content: space-between;
@@ -144,7 +164,7 @@ body {
 
 .tab-nav-btn.active {
   background: var(--accent);
-  color: #241a08;
+  color: var(--accent-text);
   font-weight: 700;
 }
 
@@ -208,18 +228,78 @@ section {
   transition: all 0.15s ease;
 }
 
-.slot:hover {
-  border-color: var(--accent);
+/* Same category colours as the pill list below (.pill-cat-*), so the slot a
+ * pill will land in is identifiable by colour before you even click it.
+ * Declared before :hover/.slot-active so those still win on interaction. */
+.slot-border-person {
+  border-color: var(--cat-person);
 }
 
+.slot-border-matter {
+  border-color: var(--cat-matter);
+}
+
+.slot-border-place {
+  border-color: var(--cat-place);
+}
+
+.slot-border-object {
+  border-color: var(--cat-object);
+}
+
+/* Neutral hover feedback — same reasoning as .slot-active below: the main
+ * accent colour is reserved for "this material is actually chosen", so
+ * hovering must not borrow it either. */
+.slot:hover {
+  filter: brightness(1.2);
+}
+
+/* Active-filter state deliberately does NOT use the main accent colour —
+ * that's reserved for "this material is actually chosen" (.slot-filled /
+ * .pill.active) so the two states never look the same. Instead it stays in
+ * the slot's own category colour, just heavier: a thicker border plus a
+ * faint tint of that same colour as the background. */
 .slot-active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  border-width: 2px;
+}
+
+.slot-border-person.slot-active {
+  background: color-mix(in srgb, var(--cat-person) 18%, transparent);
+}
+
+.slot-border-matter.slot-active {
+  background: color-mix(in srgb, var(--cat-matter) 18%, transparent);
+}
+
+.slot-border-place.slot-active {
+  background: color-mix(in srgb, var(--cat-place) 18%, transparent);
+}
+
+.slot-border-object.slot-active {
+  background: color-mix(in srgb, var(--cat-object) 18%, transparent);
 }
 
 .slot-filled .slot-value {
-  color: var(--accent);
   font-weight: 600;
+}
+
+/* A chosen material's value text takes its own category colour (matching
+ * the pill it came from) instead of plain white — the main accent stays
+ * reserved for the pill list's .pill.active, never duplicated up here. */
+.slot-border-person.slot-filled .slot-value {
+  color: var(--cat-person);
+}
+
+.slot-border-matter.slot-filled .slot-value {
+  color: var(--cat-matter);
+}
+
+.slot-border-place.slot-filled .slot-value {
+  color: var(--cat-place);
+}
+
+.slot-border-object.slot-filled .slot-value {
+  color: var(--cat-object);
 }
 
 .slot-cat {
@@ -288,7 +368,7 @@ section {
   border-radius: 12px;
   border: none;
   background: var(--accent);
-  color: #241a08;
+  color: var(--accent-text);
   font-size: 0.95rem;
   font-weight: 700;
   cursor: pointer;
@@ -300,48 +380,71 @@ section {
   cursor: not-allowed;
 }
 
-/* Material picker: left tabs (人/事/地/物), right pills for the active tab */
+/* Material picker: a flat, colour-coded pill list — every unlocked material
+ * from all four categories at once by default; clicking a slot above
+ * narrows it to one category (see attachPlayHandlers). */
 .material-area {
   display: flex;
-  gap: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-.material-tabs {
-  display: flex;
   flex-direction: column;
-  flex: 0 0 88px;
-  border-right: 1px solid var(--card-border);
+  gap: 10px;
+  padding: 14px 16px;
 }
 
-.material-tab {
-  border: none;
+.material-area-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.material-area-hint {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.sort-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.sort-toggle-btn {
+  border: 1px solid var(--card-border);
   background: none;
   color: var(--text-dim);
-  padding: 14px 8px;
-  font-size: 0.95rem;
+  border-radius: 999px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  line-height: 1;
   cursor: pointer;
-  border-left: 3px solid transparent;
   transition: all 0.15s ease;
 }
 
-.material-tab:hover {
+.sort-toggle-btn:hover {
   color: var(--text);
 }
 
-.material-tab.active {
+.sort-toggle-btn.active {
   color: var(--accent);
-  background: rgba(255, 180, 84, 0.08);
-  border-left-color: var(--accent);
+  border-color: var(--accent);
   font-weight: 600;
 }
 
 .material-options {
-  flex: 1;
-  padding: 16px;
   display: flex;
   align-items: flex-start;
+}
+
+.material-empty {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-style: italic;
+  margin: 0;
 }
 
 .pill-group {
@@ -354,14 +457,16 @@ section {
   border: 1px solid var(--card-border);
   background: #232734;
   color: var(--text);
-  border-radius: 999px;
+  /* Same border weight + radius as .slot above, so the two rows of boxes
+   * read as one consistent shape language. */
+  border-radius: 10px;
   padding: 6px 14px;
   font-size: 0.85rem;
   cursor: pointer;
   transition: all 0.15s ease;
   /* A longer AI-invented label (up to 12 chars) must never wrap onto a
-   * second line inside a pill shape — it just widens the pill instead,
-   * wrapping as a whole unit within .pill-group's flex-wrap. */
+   * second line — it just widens the chip instead, wrapping as a whole
+   * unit within .pill-group's flex-wrap. */
   white-space: nowrap;
 }
 
@@ -369,9 +474,31 @@ section {
   border-color: var(--accent);
 }
 
+/* Category colour-coding — lower specificity than .pill.active below, so a
+ * selected pill's accent fill always wins regardless of its category. */
+.pill-cat-person {
+  border-color: var(--cat-person);
+  color: var(--cat-person);
+}
+
+.pill-cat-matter {
+  border-color: var(--cat-matter);
+  color: var(--cat-matter);
+}
+
+.pill-cat-place {
+  border-color: var(--cat-place);
+  color: var(--cat-place);
+}
+
+.pill-cat-object {
+  border-color: var(--cat-object);
+  color: var(--cat-object);
+}
+
 .pill.active {
   background: var(--accent);
-  color: #241a08;
+  color: var(--accent-text);
   border-color: var(--accent);
   font-weight: 600;
 }
@@ -381,28 +508,6 @@ section {
     flex-direction: column;
     align-items: stretch;
   }
-
-  .material-area {
-    flex-direction: column;
-  }
-
-  .material-tabs {
-    flex-direction: row;
-    flex: 0 0 auto;
-    border-right: none;
-    border-bottom: 1px solid var(--card-border);
-  }
-
-  .material-tab {
-    flex: 1;
-    border-left: none;
-    border-bottom: 3px solid transparent;
-  }
-
-  .material-tab.active {
-    border-left-color: transparent;
-    border-bottom-color: var(--accent);
-  }
 }
 
 .resolve-btn {
@@ -411,7 +516,7 @@ section {
   border-radius: 12px;
   border: none;
   background: var(--accent);
-  color: #241a08;
+  color: var(--accent-text);
   font-size: 1.05rem;
   font-weight: 700;
   cursor: pointer;
@@ -530,28 +635,61 @@ section {
   background: rgba(36, 26, 8, 0.18);
 }
 
-.market-notice {
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 0.85rem;
-}
-
-.market-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-}
-
-.market-card {
+.market-card-main {
   background: var(--card);
   border: 1px solid var(--card-border);
   border-radius: 14px;
-  padding: 18px 12px;
-  text-align: center;
+  padding: 18px 16px;
   display: flex;
   flex-direction: column;
+  gap: 10px;
+}
+
+.market-balance-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.95rem;
+}
+
+.market-balance-row strong {
+  font-size: 1.2rem;
+  color: var(--accent);
+}
+
+.market-product-row {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 4px;
+  gap: 12px;
+}
+
+.market-product-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.market-product-row .market-buy-btn {
+  width: auto;
+  padding: 8px 20px;
+}
+
+.market-divider {
+  border-top: 1px solid var(--card-border);
+  margin: 2px 0;
+}
+
+.market-footer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+
+.market-footer-sep {
+  color: var(--text-dim);
 }
 
 .market-units {
@@ -580,6 +718,60 @@ section {
   color: var(--text-dim);
   font-size: 0.82rem;
   cursor: not-allowed;
+}
+
+.market-buy-btn-enabled {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.market-error {
+  color: #ff6b6b;
+  font-size: 0.82rem;
+}
+
+.view-terms-link {
+  display: inline;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.8rem;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.support-email-link {
+  color: var(--accent);
+  font-size: 0.8rem;
+  text-decoration: underline;
+}
+
+.paypal-button-container {
+  width: 100%;
+  max-width: 300px;
+  min-height: 45px;
+}
+
+.market-google-gate,
+.market-flow-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  padding: 24px 18px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.market-google-gate .market-buy-btn,
+.market-flow-card .market-buy-btn {
+  width: auto;
+  padding: 8px 24px;
 }
 
 .history-controls {
@@ -735,6 +927,11 @@ section {
   font-style: italic;
 }
 
+.tag-jobtitle {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .collection-desc {
   color: var(--text-dim);
   font-size: 0.8rem;
@@ -767,18 +964,34 @@ section {
 .account-badge {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
   white-space: nowrap;
   font-size: 0.7rem;
   padding: 4px 9px;
-  border-radius: 999px;
+  border-radius: 14px;
   border: 1px solid var(--card-border);
   background: #232734;
   color: var(--text);
   cursor: pointer;
 }
 
+.account-badge-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.25;
+}
+
 .account-badge-label {
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-badge-jobtitle {
+  color: var(--text-dim);
+  font-size: 0.62rem;
   max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -949,12 +1162,26 @@ section {
   gap: 8px;
 }
 
+.modal-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+
+.modal-checkbox-row input {
+  accent-color: var(--accent);
+}
+
 .modal-btn-primary {
   padding: 8px 20px;
   border-radius: 10px;
   border: none;
   background: var(--accent);
-  color: #241a08;
+  color: var(--accent-text);
   font-weight: 700;
   font-size: 0.88rem;
   cursor: pointer;

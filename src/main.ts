@@ -1,10 +1,21 @@
-import { pullRemoteState, pushRemoteState } from "./cloudSync";
+import { fetchCurrentAnnouncement } from "./announcements";
+import { deleteRemoteState, pullRemoteState, pushRemoteState } from "./cloudSync";
 import { buildComboKey, decodeComboKey, getOptionById, hasAnySelection } from "./combo";
 import { MAX_STAMINA_UNITS, STORAGE_KEY, UNIT_MINUTES } from "./config";
 import { SEED_OPTIONS } from "./data/options";
 import { resolveAction, type ResolveResult } from "./eventEngine";
 import { ensureSignedIn, isGoogleLinked, signInWithGoogle, signOutToLocal } from "./firebase";
 import { t as translate } from "./i18n";
+import {
+  captureTopupOrder,
+  createTopupOrder,
+  exchangeCoinsForStamina,
+  getOrderStatus,
+  listTopupProducts,
+  type TopupOrder,
+  type TopupProduct,
+} from "./paypalTopup";
+import { loadPaypalSdk, renderPaypalButtons } from "./paypalSdk";
 import {
   hasSavedState,
   isUnlocked,
@@ -14,8 +25,8 @@ import {
   settleStamina,
   type GameState,
 } from "./state";
-import { CATEGORY_LABEL, CATEGORY_ORDER } from "./types";
-import type { Category, Localized, Selection } from "./types";
+import { CATEGORY_LABEL, CATEGORY_ORDER, PLAYER_TOKEN } from "./types";
+import type { Announcement, Category, Localized, Selection } from "./types";
 import type { User } from "firebase/auth";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -48,6 +59,18 @@ function optionLabel(id: string): string {
   return L(getOptionById(id, state.knownMaterials)?.label ?? { zh: "", en: "" });
 }
 
+/** Story text never contains a real name (see types.ts's PLAYER_TOKEN) — this
+ * swaps the placeholder for the *current viewer's* own name at display time,
+ * so a shared/cached event always reads as "you", regardless of who
+ * originally discovered it (that's what the separate discovererName field is
+ * for). A no-op on text that never had the token in the first place, e.g.
+ * the local offline fallback, which already bakes in the real name directly
+ * since it's never shared with anyone else. */
+function personalize(text: string): string {
+  const name = state.playerName || t("youFallback"); // shouldn't happen — name is required before play
+  return text.split(PLAYER_TOKEN).join(name);
+}
+
 function emptySelection(): Selection {
   return { person: null, matter: null, place: null, object: null };
 }
@@ -70,6 +93,11 @@ let resultStale = false;
  * this modal is currently open or already dismissed. */
 let resultModalOpen = false;
 let insufficientStaminaFlash = false;
+/** True right after a resolve attempt exhausted all its retries with no
+ * local fallback to fall back to — the player's stamina was already
+ * refunded (see eventEngine.ts's resolveAction), this just tells them why
+ * nothing happened and that trying again is the right move. */
+let generationFailedFlash = false;
 let isResolving = false;
 let currentUser: User | null = null;
 let syncNotice: string | null = null;
@@ -82,6 +110,61 @@ let nameModalCanCancel = true;
 let nameInputDraft = "";
 /** Index into TUTORIAL_STEPS while the guided tour is active, null otherwise. */
 let tutorialStep: number | null = null;
+
+// --- Admin-authored announcement modal (see admin.html) ---
+let announcement: Announcement | null = null;
+let announcementModalOpen = false;
+let announcementDismissForeverChecked = false;
+
+async function loadAnnouncementAndMaybeShow() {
+  try {
+    announcement = await fetchCurrentAnnouncement();
+  } catch (err) {
+    console.warn("公告載入失敗", err);
+    return;
+  }
+  if (!announcement?.enabled) return;
+  if (announcement.dismissible && state.dismissedAnnouncementId === announcement.id) return;
+  announcementModalOpen = true;
+  render();
+}
+
+function renderAnnouncementModal(): string {
+  if (!announcement) return "";
+  return `
+    <div class="modal-backdrop">
+      <div class="modal-card">
+        <h2>${escapeHtml(L(announcement.title))}</h2>
+        <p class="modal-hint">${escapeHtml(L(announcement.body)).replace(/\n/g, "<br/>")}</p>
+        ${
+          announcement.dismissible
+            ? `<label class="modal-checkbox-row">
+                 <input type="checkbox" id="announcement-dismiss-forever" ${announcementDismissForeverChecked ? "checked" : ""} />
+                 <span>${t("announcementDismissForeverLabel")}</span>
+               </label>`
+            : ""
+        }
+        <div class="modal-actions">
+          <button id="announcement-close-btn" class="modal-btn-primary">${t("closeBtn")}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function attachAnnouncementModalHandlers() {
+  document.querySelector<HTMLInputElement>("#announcement-dismiss-forever")?.addEventListener("change", (e) => {
+    announcementDismissForeverChecked = (e.target as HTMLInputElement).checked;
+  });
+  document.querySelector<HTMLButtonElement>("#announcement-close-btn")?.addEventListener("click", () => {
+    if (announcement?.dismissible && announcementDismissForeverChecked) {
+      state.dismissedAnnouncementId = announcement.id;
+      persist();
+    }
+    announcementModalOpen = false;
+    render();
+  });
+}
 
 interface TutorialStepDef {
   /** CSS selector for the button/control this step points an arrow at. */
@@ -97,8 +180,212 @@ const TUTORIAL_STEPS: TutorialStepDef[] = [
   { selector: ".stamina-mini", textKey: "tutorialStep4" },
   { selector: '[data-view="history"]', textKey: "tutorialStep5" },
 ];
-/** Which category's materials are currently shown in the right-hand picker. */
-let activeCategory: Category = CATEGORY_ORDER[0];
+/** Which single category the material list is narrowed to — null means "show
+ * every unlocked material from all four categories at once" (the default).
+ * Toggled by clicking one of the four slot boxes in the action bar; clicking
+ * the already-active one clears it back to null. */
+let activeCategory: Category | null = null;
+/** "label" sorts alphabetically (locale-aware); "unlockOrder" sorts by the
+ * order state.unlockedOptionIds recorded them in (oldest first) — not
+ * persisted, resets to alphabetical on reload like the other transient
+ * play-page UI state (historySearchQuery, historyFilters, etc). */
+type MaterialSortMode = "label" | "unlockOrder";
+let materialSortMode: MaterialSortMode = "unlockOrder";
+
+// --- PayPal top-up (市集) state ---
+let marketProducts: TopupProduct[] | null = null;
+let marketLoading = false;
+let marketLoadError: string | null = null;
+let marketExchangeBusy = false;
+let marketExchangeError: string | null = null;
+/** "confirm" gates a purchase (shown once, before the very first buy);
+ * "review" is opened any time via the market page's "查看條款" link and has
+ * no side effect on close. */
+let consentModalOpen = false;
+let consentModalMode: "confirm" | "review" = "confirm";
+/** Which product the buyer was trying to purchase when the confirm-gate
+ * fired — resumed automatically once they confirm, so agreeing to the
+ * terms doesn't lose their in-progress click. */
+let pendingPurchaseProduct: TopupProduct | null = null;
+const SUPPORT_EMAIL = "working.ata.lee@gmail.com";
+
+type PurchaseFlow =
+  | { kind: "idle" }
+  /** `paypalOrderId` is null while createTopupOrder is still in flight, then
+   * set once we have a real PayPal order to mount Buttons against — see
+   * attachMarketHandlers, which only renders the Buttons once it's set. */
+  | { kind: "processing"; orderId: string | null; paypalOrderId: string | null }
+  | { kind: "success"; order: TopupOrder }
+  | { kind: "failed"; message: string }
+  | { kind: "cancelled" }
+  /** Our own capture call itself failed/timed out (network blip, function
+   * cold start, etc.) — independent of whether PayPal's side actually
+   * succeeded. Must never be shown as a failure: the webhook or a manual
+   * recheck is what resolves this, not telling the player to pay again. */
+  | { kind: "pending"; orderId: string };
+
+let purchaseFlow: PurchaseFlow = { kind: "idle" };
+/** Indirection so a click-driven mutation of `purchaseFlow` mid-`await` in
+ * handleBuy is actually observed — a direct `purchaseFlow.kind === "..."`
+ * check right after an `await` gets over-narrowed by TS's control-flow
+ * analysis to whatever was last assigned in that function, ignoring that a
+ * button handler could have reassigned the module-level variable in the
+ * meantime. */
+function purchaseFlowKind(): PurchaseFlow["kind"] {
+  return purchaseFlow.kind;
+}
+
+async function loadMarketProducts() {
+  marketLoading = true;
+  marketLoadError = null;
+  render();
+  try {
+    marketProducts = await listTopupProducts();
+  } catch (err) {
+    marketLoadError = t("marketLoadError");
+    console.warn("市集商品載入失敗", err);
+  }
+  marketLoading = false;
+  render();
+}
+
+function handleBuy(product: TopupProduct) {
+  if (purchaseFlow.kind === "processing") return;
+  if (!state.consentAcceptedAt) {
+    pendingPurchaseProduct = product;
+    consentModalMode = "confirm";
+    consentModalOpen = true;
+    render();
+    return;
+  }
+  proceedToBuy(product);
+}
+
+function handleViewTerms() {
+  consentModalMode = "review";
+  consentModalOpen = true;
+  render();
+}
+
+function handleConsentConfirm() {
+  state.consentAcceptedAt = Date.now();
+  persist();
+  consentModalOpen = false;
+  const product = pendingPurchaseProduct;
+  pendingPurchaseProduct = null;
+  render();
+  if (product) proceedToBuy(product);
+}
+
+function handleConsentClose() {
+  consentModalOpen = false;
+  pendingPurchaseProduct = null;
+  render();
+}
+
+async function proceedToBuy(product: TopupProduct) {
+  purchaseFlow = { kind: "processing", orderId: null, paypalOrderId: null };
+  render();
+
+  let order: TopupOrder;
+  try {
+    order = await createTopupOrder(product.id);
+  } catch (err) {
+    purchaseFlow = { kind: "failed", message: (err as Error)?.message ?? String(err) };
+    render();
+    return;
+  }
+
+  // The buyer could have clicked "取消" while createTopupOrder's network
+  // call was still in flight — don't stomp that with a stale "processing".
+  if (purchaseFlowKind() === "cancelled") return;
+  if (!order.paypalOrderId) {
+    purchaseFlow = { kind: "failed", message: t("marketFailedTitle") };
+    render();
+    return;
+  }
+  // Mounting the actual PayPal Buttons for this paypalOrderId happens in
+  // attachMarketHandlers right after this render(), not here — rendering
+  // is main.ts's job, the SDK call belongs next to the DOM it targets.
+  purchaseFlow = { kind: "processing", orderId: order.orderId, paypalOrderId: order.paypalOrderId };
+  render();
+}
+
+/** Called once the buyer approves payment in the PayPal popup. This is the
+ * ONLY place captureTopupOrder is invoked from the client — the webhook is
+ * the other caller, and both funnel into the same backend idempotent
+ * captureAndCredit, never a separate path. */
+async function handlePaypalApprove(orderId: string) {
+  purchaseFlow = { kind: "processing", orderId, paypalOrderId: null }; // hide the buttons while confirming
+  render();
+  try {
+    const captured = await captureTopupOrder(orderId);
+    if (captured.status === "CREDITED") {
+      purchaseFlow = { kind: "success", order: captured };
+      await refreshWalletFromServer();
+    } else if (captured.status === "FAILED") {
+      purchaseFlow = { kind: "failed", message: captured.failureReason ?? t("marketFailedTitle") };
+    } else {
+      purchaseFlow = { kind: "pending", orderId };
+    }
+  } catch (err) {
+    console.warn("確認付款失敗(訂單可能仍在處理中)", err);
+    purchaseFlow = { kind: "pending", orderId };
+  }
+  render();
+}
+
+async function refreshWalletFromServer() {
+  if (!currentUser) return;
+  try {
+    const remote = await pullRemoteState(currentUser.uid);
+    if (remote) {
+      state.wallet = remote.wallet;
+      saveState(state);
+    }
+  } catch (err) {
+    console.warn("同步錢包餘額失敗", err);
+  }
+}
+
+async function handleRecheckOrder(orderId: string) {
+  try {
+    const order = await getOrderStatus(orderId);
+    if (order.status === "CREDITED") {
+      purchaseFlow = { kind: "success", order };
+      await refreshWalletFromServer();
+    } else if (order.status === "FAILED") {
+      purchaseFlow = { kind: "failed", message: order.failureReason ?? t("marketFailedTitle") };
+    } else {
+      purchaseFlow = { kind: "pending", orderId };
+    }
+  } catch (err) {
+    console.warn("查詢訂單狀態失敗", err);
+  }
+  render();
+}
+
+async function handleExchangeAll() {
+  const total = state.wallet.paidCoinBalance;
+  if (total <= 0 || marketExchangeBusy) return;
+  marketExchangeBusy = true;
+  marketExchangeError = null;
+  render();
+  try {
+    const result = await exchangeCoinsForStamina(total);
+    state.wallet = result;
+    // Purchased stamina is meant to let a paying player exceed the free
+    // regen cap — unlike natural regen (settleStamina), this intentionally
+    // does not clamp to MAX_STAMINA_UNITS.
+    state.staminaUnits += total;
+    persist();
+  } catch (err) {
+    marketExchangeError = t("marketExchangeFailed");
+    console.warn("兌換加班費失敗", err);
+  }
+  marketExchangeBusy = false;
+  render();
+}
 /** History entries are collapsed to just a title by default; expanding one
  * adds its comboKey here. Multiple can be open at once. */
 const expandedHistoryKeys = new Set<string>();
@@ -160,7 +447,42 @@ function optionsFor(category: Category) {
   const dynamicOptions = Object.entries(state.knownMaterials)
     .filter(([id, m]) => m.category === category && isUnlocked(state, id))
     .map(([id, m]) => ({ id, category: m.category, label: m.label }));
-  return [...seedOptions, ...dynamicOptions];
+  // AI invention has no dedup step (by design — see functions/src/index.ts),
+  // so it can occasionally coin a label that already exists under a
+  // different id (e.g. inventing "茶水間" again despite the seed option of
+  // the same name). Collapse same-looking pills at the display layer, in
+  // whichever language is currently shown, rather than making generation
+  // itself dedup-aware — keeps the invention prompt simple and this bug
+  // fixed regardless of which language surfaced the collision first. First
+  // occurrence wins (seed options take priority over dynamic ones).
+  const seenLabels = new Set<string>();
+  const deduped: { id: string; category: Category; label: Localized }[] = [];
+  for (const option of [...seedOptions, ...dynamicOptions]) {
+    const displayed = L(option.label);
+    if (seenLabels.has(displayed)) continue;
+    seenLabels.add(displayed);
+    deduped.push(option);
+  }
+  return deduped;
+}
+
+/** Always grouped by category (in CATEGORY_ORDER) — the sort toggle only
+ * decides the order *within* each group, never mixes categories together.
+ * When `cat` is null (the default "show everything" view) that means four
+ * consecutive groups; when the player has narrowed the picker via a slot
+ * click, it's just the one group. */
+function materialOptionsFor(cat: Category | null): { id: string; category: Category; label: Localized }[] {
+  const orderIndex = new Map(state.unlockedOptionIds.map((id, i) => [id, i]));
+  const locale = state.language === "en" ? "en" : "zh-Hant";
+  const sortGroup = (items: { id: string; category: Category; label: Localized }[]) =>
+    items
+      .slice()
+      .sort((a, b) =>
+        materialSortMode === "unlockOrder"
+          ? (orderIndex.get(a.id) ?? Infinity) - (orderIndex.get(b.id) ?? Infinity)
+          : L(a.label).localeCompare(L(b.label), locale)
+      );
+  return (cat ? [cat] : CATEGORY_ORDER).flatMap((c) => sortGroup(optionsFor(c)));
 }
 
 function maxSelectableUnits(): number {
@@ -182,6 +504,7 @@ function render() {
       <header class="app-header">
         <h1>${t("appTitle")}</h1>
         <div class="header-right">
+          ${renderHeaderCurrency()}
           ${renderHeaderStamina()}
           ${renderAccountMenu()}
         </div>
@@ -191,7 +514,7 @@ function render() {
 
       ${content}
     </div>
-    ${nameModalOpen ? renderNameModal() : ""}
+    ${nameModalOpen ? renderNameModal() : !nameModalOpen && announcementModalOpen ? renderAnnouncementModal() : ""}
     ${tutorialStep !== null ? renderTutorialOverlay() : ""}
     ${resultModalOpen ? renderResultModal() : ""}
   `;
@@ -200,12 +523,26 @@ function render() {
   attachAccountMenuHandlers();
   if (view === "play") attachPlayHandlers();
   if (view === "history") attachHistoryHandlers();
+  if (view === "market") attachMarketHandlers();
   if (nameModalOpen) attachNameModalHandlers();
+  else if (announcementModalOpen) attachAnnouncementModalHandlers();
   if (resultModalOpen) attachResultModalHandlers();
   if (tutorialStep !== null) {
     attachTutorialHandlers();
     positionTutorialOverlay();
   }
+}
+
+/** Shown on every page (not just the market tab) — a paying player should
+ * always be able to glance at their balance, not have to switch tabs to
+ * check. Reads state.wallet directly rather than fetching anything, so it
+ * works even before the market tab's product list has ever loaded. */
+function renderHeaderCurrency(): string {
+  return `
+    <div class="header-currency" title="${t("currencyLabel")}">
+      💰 <span class="header-currency-value">${state.wallet.paidCoinBalance}</span>
+    </div>
+  `;
 }
 
 function renderHeaderStamina(): string {
@@ -233,7 +570,11 @@ function renderAccountMenu(): string {
   return `
     <div class="account-menu">
       <button id="account-menu-btn" class="account-badge ${loggedIn ? "account-badge-cloud" : "account-badge-local"}">
-        ${loggedIn ? "☁️" : "🔒"} <span class="account-badge-label">${escapeHtml(label)}</span>
+        <span class="account-badge-icon">${loggedIn ? "☁️" : "🔒"}</span>
+        <span class="account-badge-lines">
+          <span class="account-badge-jobtitle">${escapeHtml(L(state.jobTitle))}</span>
+          <span class="account-badge-label">${escapeHtml(label)}</span>
+        </span>
       </button>
       ${accountMenuOpen ? renderAccountDropdown(loggedIn) : ""}
     </div>
@@ -248,6 +589,10 @@ function renderAccountDropdown(loggedIn: boolean): string {
         <span class="account-dropdown-name-value">${escapeHtml(state.playerName || t("notSet"))}</span>
         <button id="edit-name-btn" class="account-name-edit-btn" title="${t("editNameTitle")}">✏️</button>
       </div>
+      <div class="account-dropdown-name-row">
+        <span class="account-dropdown-name-label">${t("jobTitleLabel")}</span>
+        <span class="account-dropdown-name-value">${escapeHtml(L(state.jobTitle))}</span>
+      </div>
       <button id="language-toggle-btn" class="account-dropdown-btn">${t("languageToggle")}</button>
       ${
         loggedIn
@@ -258,7 +603,7 @@ function renderAccountDropdown(loggedIn: boolean): string {
       }
       ${syncNotice ? `<p class="account-dropdown-notice">${escapeHtml(syncNotice)}</p>` : ""}
       <hr class="account-dropdown-divider" />
-      <button id="reset-btn" class="account-dropdown-btn account-dropdown-btn-danger">${t("resetProgress")}</button>
+      <button id="delete-account-btn" class="account-dropdown-btn account-dropdown-btn-danger">${t("deleteAccount")}</button>
     </div>
   `;
 }
@@ -363,13 +708,22 @@ function renderTabNav(): string {
   `;
 }
 
+/** Plain single-colour stroke icons (not emoji) for the sort toggle — using
+ * `currentColor` lets them inherit .sort-toggle-btn's text colour, so the
+ * active/hover states already defined in CSS just work without a second
+ * "active" icon variant. */
+const SORT_ALPHA_ICON =
+  '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="5" x2="9" y2="5"/><line x1="3" y1="10" x2="12" y2="10"/><line x1="3" y1="15" x2="15" y2="15"/><path d="M17 4v9m0 0l-2.5-2.5M17 13l2.5-2.5"/></svg>';
+const SORT_CLOCK_ICON =
+  '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.5V10l3 2"/></svg>';
+
 function renderPlayContent(): string {
   const remaining = state.staminaUnits;
   const cappedDuration = Math.min(durationUnits, Math.max(1, maxSelectableUnits()));
   if (cappedDuration !== durationUnits) durationUnits = cappedDuration;
   const hasSelection = hasAnySelection(selection);
   const canAct = remaining > 0 && !isResolving && hasSelection;
-  const currentComboKey = hasSelection ? buildComboKey(selection, durationUnits) : null;
+  const currentComboKey = hasSelection ? buildComboKey(selection, durationUnits, state.jobTitle.zh) : null;
   const showingResult = lastResult !== null && !resultStale;
   // Suppress the hint while the result card is showing that exact combo — it
   // already communicates new-vs-repeat, so the hint would just be a confusing
@@ -407,13 +761,15 @@ function renderPlayContent(): string {
 
     ${isDuplicate ? `<p class="duplicate-hint">${t("duplicateHint")}</p>` : ""}
     ${insufficientStaminaFlash ? `<p class="warning">${t("insufficientStaminaWarning")}</p>` : ""}
+    ${generationFailedFlash ? `<p class="warning">${t("generationFailedWarning")}</p>` : ""}
 
     <section class="material-area">
-      <div class="material-tabs">
-        ${CATEGORY_ORDER.map(
-          (cat) =>
-            `<button class="material-tab ${cat === activeCategory ? "active" : ""}" data-tab-category="${cat}">${L(CATEGORY_LABEL[cat])}</button>`
-        ).join("")}
+      <div class="material-area-header">
+        <p class="material-area-hint">${activeCategory ? t("filteredByHint", { category: L(CATEGORY_LABEL[activeCategory]) }) : t("allMaterialsHint")}</p>
+        <div class="sort-toggle">
+          <button class="sort-toggle-btn ${materialSortMode === "label" ? "active" : ""}" data-sort-mode="label" title="${t("sortByLabelBtn")}" aria-label="${t("sortByLabelBtn")}">${SORT_ALPHA_ICON}</button>
+          <button class="sort-toggle-btn ${materialSortMode === "unlockOrder" ? "active" : ""}" data-sort-mode="unlockOrder" title="${t("sortByUnlockOrderBtn")}" aria-label="${t("sortByUnlockOrderBtn")}">${SORT_CLOCK_ICON}</button>
+        </div>
       </div>
       <div class="material-options">
         ${renderMaterialOptions(activeCategory)}
@@ -426,22 +782,22 @@ function renderSlot(cat: Category): string {
   const selectedId = selection[cat];
   const valueLabel = selectedId ? optionLabel(selectedId) : t("unselected");
   return `
-    <button class="slot ${cat === activeCategory ? "slot-active" : ""} ${selectedId ? "slot-filled" : ""}" data-slot-category="${cat}">
+    <button class="slot slot-border-${cat} ${cat === activeCategory ? "slot-active" : ""} ${selectedId ? "slot-filled" : ""}" data-slot-category="${cat}">
       <span class="slot-cat">${L(CATEGORY_LABEL[cat])}</span>
       <span class="slot-value">${escapeHtml(valueLabel)}</span>
     </button>
   `;
 }
 
-function renderMaterialOptions(cat: Category): string {
-  const options = optionsFor(cat);
-  const selectedId = selection[cat];
+function renderMaterialOptions(cat: Category | null): string {
+  const options = materialOptionsFor(cat);
+  if (options.length === 0) return `<p class="material-empty">${t("noUnlockedMaterials")}</p>`;
   return `
-    <div class="pill-group" data-category="${cat}">
+    <div class="pill-group">
       ${options
         .map(
           (o) =>
-            `<button class="pill ${selectedId === o.id ? "active" : ""}" data-value="${o.id}">${escapeHtml(L(o.label))}</button>`
+            `<button class="pill pill-cat-${o.category} ${selection[o.category] === o.id ? "active" : ""}" data-value="${o.id}" data-category="${o.category}">${escapeHtml(L(o.label))}</button>`
         )
         .join("")}
     </div>
@@ -469,18 +825,20 @@ function renderFeaturedTag(
  * a clear look at what just happened instead of it blending into the page. */
 function renderResultModal(): string {
   if (!lastResult || !resultModalOpen) return "";
-  const { event, isNewDiscovery, isFeaturedOptionNewToMe } = lastResult;
+  const { event, isNewDiscovery, isFeaturedOptionNewToMe, jobTitleChanged } = lastResult;
   return `
     <div class="modal-backdrop">
       <div class="modal-card result-modal-card ${isNewDiscovery ? "result-modal-new" : ""}">
         <div class="result-title-row">
-          <h2>${escapeHtml(L(event.title))}</h2>
+          <h2>${escapeHtml(personalize(L(event.title)))}</h2>
           <span class="${isNewDiscovery ? "badge-new" : "badge-repeat"}">${isNewDiscovery ? t("firstDiscovery") : t("repeatEvent")}</span>
         </div>
-        <p class="result-desc">${escapeHtml(L(event.description))}</p>
+        <p class="result-desc">${escapeHtml(personalize(L(event.description)))}</p>
         <p class="result-meta">${t("spentLabel", { duration: formatDuration(event.durationUnits) })}</p>
+        <p class="result-meta">${t("jobTitleLabel")}:${escapeHtml(L(event.jobTitle))}</p>
         <p class="result-meta">🔎 ${t("discovererLine", { name: event.discovererName, time: formatTimestamp(event.discoveredAt) })}</p>
         ${renderFeaturedTag(event, isFeaturedOptionNewToMe)}
+        ${jobTitleChanged ? `<div class="unlock-toast">${t("jobTitleChangedTitle")} — ${t("jobTitleChangedBody", { title: escapeHtml(L(jobTitleChanged)) })}</div>` : ""}
         <div class="modal-actions">
           <button id="result-modal-close-btn" class="modal-btn-primary">${t("closeBtn")}</button>
         </div>
@@ -497,7 +855,7 @@ function renderHistoryEntry(key: string): string {
     return `
       <li class="collection-entry collection-entry-collapsed">
         <button class="collection-entry-toggle" data-history-key="${key}">
-          <span class="collection-entry-title">${escapeHtml(L(ev.title))}</span>
+          <span class="collection-entry-title">${escapeHtml(personalize(L(ev.title)))}</span>
           <span class="collection-entry-chevron">▾</span>
         </button>
       </li>
@@ -508,11 +866,17 @@ function renderHistoryEntry(key: string): string {
   const tags = CATEGORY_ORDER.filter((cat) => labels[cat]).map(
     (cat) => `<span class="tag">${L(CATEGORY_LABEL[cat])}:${escapeHtml(L(labels[cat]!))}</span>`
   );
+  // Events collected before the job-title system existed have no `.jobTitle`
+  // at all (old Firestore docs / old localStorage entries) — skip the tag
+  // rather than render "undefined".
+  if (ev.jobTitle?.zh) {
+    tags.unshift(`<span class="tag tag-jobtitle">${t("jobTitleLabel")}:${escapeHtml(L(ev.jobTitle))}</span>`);
+  }
 
   return `
     <li class="collection-entry collection-entry-expanded">
       <button class="collection-entry-toggle" data-history-key="${key}">
-        <span class="collection-entry-title">${escapeHtml(L(ev.title))}</span>
+        <span class="collection-entry-title">${escapeHtml(personalize(L(ev.title)))}</span>
         <span class="collection-entry-chevron">▴</span>
       </button>
       <div class="collection-entry-details">
@@ -520,7 +884,7 @@ function renderHistoryEntry(key: string): string {
           <span class="collection-entry-duration">${formatDuration(ev.durationUnits)}</span>
         </div>
         <div class="tag-row">${tags.length > 0 ? tags.join("") : `<span class="tag tag-empty">${t("noMaterialsTag")}</span>`}</div>
-        <p class="collection-desc">${escapeHtml(L(ev.description))}</p>
+        <p class="collection-desc">${escapeHtml(personalize(L(ev.description)))}</p>
         ${(() => {
           if (!ev.featuredOption) return "";
           // See renderFeaturedTag's comment — old cached events predate the
@@ -596,7 +960,7 @@ function historyMatchesFilters(key: string): boolean {
   const query = historySearchQuery.trim().toLowerCase();
   if (!query) return true;
   const labels = decodeComboKey(key, state.knownMaterials);
-  const haystack = [L(ev.title), L(ev.description), ev.discovererName, ...Object.values(labels).map(L)]
+  const haystack = [personalize(L(ev.title)), personalize(L(ev.description)), ev.discovererName, ...Object.values(labels).map(L)]
     .join(" ")
     .toLowerCase();
   return haystack.includes(query);
@@ -651,35 +1015,151 @@ function renderHistoryContent(): string {
   `;
 }
 
-interface StaminaPackage {
-  units: number;
-  priceNTD: number;
+function renderMarketContent(): string {
+  const googleLinked = !!currentUser && isGoogleLinked(currentUser);
+  const modal = consentModalOpen ? renderConsentModal() : "";
+  if (!googleLinked) return renderMarketGoogleGate() + modal;
+  if (purchaseFlow.kind !== "idle") return renderPurchaseFlow() + modal;
+
+  return `
+    ${renderMarketCard()}
+    ${renderMarketFooter()}
+    ${modal}
+  `;
 }
 
-const STAMINA_PACKAGES: StaminaPackage[] = [
-  { units: 10, priceNTD: 30 },
-  { units: 30, priceNTD: 79 },
-  { units: 60, priceNTD: 149 },
-  { units: 144, priceNTD: 299 },
-];
-
-function renderMarketContent(): string {
+function renderConsentModal(): string {
+  const reviewOnly = consentModalMode === "review";
   return `
-    <section class="market-notice">
-      <p>${t("marketNotice")}</p>
-    </section>
-    <div class="market-grid">
-      ${STAMINA_PACKAGES.map(
-        (p) => `
-          <div class="market-card">
-            <div class="market-units">${t("unitsSuffix", { n: p.units })}</div>
-            <div class="market-sub">${formatDuration(p.units)}</div>
-            <div class="market-price">NT$ ${p.priceNTD}</div>
-            <button class="market-buy-btn" disabled>${t("notAvailable")}</button>
-          </div>
-        `
-      ).join("")}
+    <div class="modal-backdrop">
+      <div class="modal-card">
+        <h2>${t("consentModalTitle")}</h2>
+        <p class="modal-hint">${t("consentModalBody")}</p>
+        <div class="modal-actions">
+          ${reviewOnly ? "" : `<button id="consent-cancel-btn" class="modal-btn-secondary">${t("cancel")}</button>`}
+          <button id="consent-confirm-btn" class="modal-btn-primary">
+            ${reviewOnly ? t("closeBtn") : t("consentAgreeBtn")}
+          </button>
+        </div>
+      </div>
     </div>
+  `;
+}
+
+function renderMarketGoogleGate(): string {
+  return `
+    <section class="market-google-gate">
+      <h2>${t("marketGoogleGateTitle")}</h2>
+      <p>${t("marketGoogleGateBody")}</p>
+      <button id="market-google-signin-btn" class="market-buy-btn market-buy-btn-enabled">${t("googleSignIn")}</button>
+    </section>
+  `;
+}
+
+/** Single unified card: balance, buy, and exchange in one place — replaces
+ * the old separate wallet card / notice paragraph / product grid, which was
+ * three stacked boxes to say one thing now that there's only one product. */
+function renderMarketCard(): string {
+  const { paidCoinBalance } = state.wallet;
+
+  if (marketLoading && !marketProducts) {
+    return `<section class="market-card-main"><p class="market-sub">${t("resolvingLabel")}</p></section>`;
+  }
+  if (marketLoadError) {
+    return `<section class="market-card-main"><p class="market-error">${escapeHtml(marketLoadError)}</p></section>`;
+  }
+  const products = marketProducts ?? [];
+
+  return `
+    <section class="market-card-main">
+      <div class="market-balance-row">
+        <span>${t("marketWalletPaid")}</span>
+        <strong>${paidCoinBalance}</strong>
+      </div>
+
+      ${products
+        .map(
+          (p) => `
+        <div class="market-product-row">
+          <div class="market-product-info">
+            <div class="market-units">${escapeHtml(L(p.name))}</div>
+            <div class="market-price">NT$ ${p.price}</div>
+          </div>
+          <button class="market-buy-btn market-buy-btn-enabled" data-product-id="${escapeHtml(p.id)}">${t("marketBuyBtn")}</button>
+        </div>
+      `
+        )
+        .join("")}
+
+      <div class="market-divider"></div>
+
+      ${marketExchangeError ? `<p class="market-error">${escapeHtml(marketExchangeError)}</p>` : ""}
+      <button
+        id="market-exchange-all-btn"
+        class="market-buy-btn ${paidCoinBalance > 0 ? "market-buy-btn-enabled" : ""}"
+        ${paidCoinBalance <= 0 || marketExchangeBusy ? "disabled" : ""}
+      >${marketExchangeBusy ? t("marketProcessing") : paidCoinBalance > 0 ? t("marketExchangeAllBtn") : t("marketExchangeNone")}</button>
+      <p class="market-sub">${t("marketExchangeNote")}</p>
+    </section>
+  `;
+}
+
+function renderMarketFooter(): string {
+  return `
+    <div class="market-footer">
+      <button id="view-terms-btn" class="view-terms-link">${t("viewTermsLink")}</button>
+      <span class="market-footer-sep">·</span>
+      <a class="support-email-link" href="mailto:${SUPPORT_EMAIL}" title="${escapeHtml(t("supportContactBody"))}">${t("supportContactTitle")}</a>
+    </div>
+  `;
+}
+
+function renderPurchaseFlow(): string {
+  if (purchaseFlow.kind === "idle") return ""; // caller only invokes this when kind !== "idle"
+  if (purchaseFlow.kind === "processing") {
+    return `
+      <section class="market-flow-card">
+        <p>${t("marketProcessing")}</p>
+        ${purchaseFlow.paypalOrderId ? `<div id="paypal-button-container" class="paypal-button-container"></div>` : ""}
+        <button id="market-cancel-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketCancelBtn")}</button>
+      </section>
+    `;
+  }
+  if (purchaseFlow.kind === "success") {
+    const { paidCoins } = purchaseFlow.order;
+    return `
+      <section class="market-flow-card">
+        <h2>${t("marketSuccessTitle")}</h2>
+        <p>${t("marketSuccessBody", { paid: paidCoins })}</p>
+        <button id="market-back-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketBackBtn")}</button>
+      </section>
+    `;
+  }
+  if (purchaseFlow.kind === "failed") {
+    return `
+      <section class="market-flow-card">
+        <h2>${t("marketFailedTitle")}</h2>
+        <p>${escapeHtml(purchaseFlow.message)}</p>
+        <button id="market-back-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketRetryBtn")}</button>
+      </section>
+    `;
+  }
+  if (purchaseFlow.kind === "cancelled") {
+    return `
+      <section class="market-flow-card">
+        <h2>${t("marketCancelledTitle")}</h2>
+        <button id="market-back-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketBackBtn")}</button>
+      </section>
+    `;
+  }
+  // pending
+  return `
+    <section class="market-flow-card">
+      <h2>${t("marketPendingTitle")}</h2>
+      <p>${t("marketPendingBody")}</p>
+      <p class="market-sub">${t("marketPendingOrderLabel", { orderId: purchaseFlow.orderId })}</p>
+      <button id="market-recheck-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketRecheckBtn")}</button>
+    </section>
   `;
 }
 
@@ -694,8 +1174,118 @@ function attachTabNavHandlers() {
     btn.addEventListener("click", () => {
       view = btn.dataset.view as View;
       render();
+      if (view === "market" && marketProducts === null && !marketLoading) {
+        loadMarketProducts();
+      }
     });
   });
+}
+
+function attachMarketHandlers() {
+  document
+    .querySelector<HTMLButtonElement>("#market-google-signin-btn")
+    ?.addEventListener("click", handleGoogleSignInClick);
+
+  document.querySelector<HTMLButtonElement>("#market-exchange-all-btn")?.addEventListener("click", () => {
+    handleExchangeAll();
+  });
+
+  document.querySelector<HTMLButtonElement>("#view-terms-btn")?.addEventListener("click", handleViewTerms);
+  document.querySelector<HTMLButtonElement>("#consent-confirm-btn")?.addEventListener("click", () => {
+    if (consentModalMode === "review") {
+      consentModalOpen = false;
+      render();
+    } else {
+      handleConsentConfirm();
+    }
+  });
+  document.querySelector<HTMLButtonElement>("#consent-cancel-btn")?.addEventListener("click", handleConsentClose);
+
+  app.querySelectorAll<HTMLButtonElement>("[data-product-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const product = marketProducts?.find((p) => p.id === btn.dataset.productId);
+      if (product) handleBuy(product);
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>("#market-cancel-btn")?.addEventListener("click", () => {
+    purchaseFlow = { kind: "cancelled" };
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>("#market-back-btn")?.addEventListener("click", () => {
+    purchaseFlow = { kind: "idle" };
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>("#market-recheck-btn")?.addEventListener("click", () => {
+    if (purchaseFlow.kind === "pending") handleRecheckOrder(purchaseFlow.orderId);
+  });
+
+  // Mounting the actual PayPal Buttons: only once we have a real
+  // paypalOrderId from createTopupOrder, and the container div this render()
+  // just put in the DOM. A fresh render() always gives us a fresh container
+  // (the old one, with whatever the SDK mounted into it, was just discarded
+  // along with the rest of the previous innerHTML), so there's no stale
+  // double-mount to worry about here.
+  if (purchaseFlow.kind === "processing" && purchaseFlow.paypalOrderId) {
+    const orderId = purchaseFlow.orderId!;
+    const paypalOrderId = purchaseFlow.paypalOrderId;
+    loadPaypalSdk()
+      .then(() => {
+        // The flow could have moved on (cancelled, or approved+captured
+        // already) by the time the SDK script finishes loading.
+        if (purchaseFlowKind() !== "processing") return;
+        renderPaypalButtons("paypal-button-container", {
+          paypalOrderId,
+          onApprove: () => handlePaypalApprove(orderId),
+          onCancel: () => {
+            purchaseFlow = { kind: "cancelled" };
+            render();
+          },
+          onError: (err) => {
+            console.warn("PayPal Buttons 錯誤", err);
+            purchaseFlow = { kind: "failed", message: t("marketFailedTitle") };
+            render();
+          },
+        });
+      })
+      .catch((err) => {
+        console.warn("PayPal SDK 載入失敗", err);
+        purchaseFlow = { kind: "failed", message: t("marketFailedTitle") };
+        render();
+      });
+  }
+}
+
+/** Shared by both the account dropdown's and the market page's Google
+ * sign-in buttons — they must never have their own independent copies of
+ * this logic (or, worse, share a DOM id and silently leave one of them
+ * without a listener attached at all). */
+async function handleGoogleSignInClick() {
+  if (currentUser && isGoogleLinked(currentUser)) return;
+  const localPlayerName = state.playerName;
+  try {
+    syncNotice = t("noticeOpeningGoogle");
+    render();
+    const user = await signInWithGoogle();
+    currentUser = user;
+    const remote = await pullRemoteState(user.uid);
+    if (remote) {
+      state = remote;
+      // Don't let adopting a nameless remote profile erase a name the
+      // player had already set locally on this device.
+      if (!state.playerName && localPlayerName) state.playerName = localPlayerName;
+      syncNotice = t("noticeRestoredFromCloud");
+    } else {
+      syncNotice = t("noticeGoogleLinked");
+      persist();
+    }
+  } catch (err) {
+    console.warn("Google 登入失敗", err);
+    syncNotice = t("noticeGoogleSignInFailed");
+  }
+  render();
 }
 
 function attachAccountMenuHandlers() {
@@ -718,9 +1308,27 @@ function attachAccountMenuHandlers() {
     render();
   });
 
-  document.querySelector<HTMLButtonElement>("#reset-btn")?.addEventListener("click", () => {
-    const ok = window.confirm(t("confirmResetProgress"));
+  document.querySelector<HTMLButtonElement>("#delete-account-btn")?.addEventListener("click", async () => {
+    const googleLinked = !!currentUser && isGoogleLinked(currentUser);
+    const ok = window.confirm(googleLinked ? t("confirmDeleteAccountCloud") : t("confirmDeleteAccountLocal"));
     if (!ok) return;
+
+    if (googleLinked && currentUser) {
+      // Actually delete the cloud doc (not just overwrite it with an empty
+      // profile via persist()) and sign out — "刪除帳號" implies the account
+      // is gone, not just reset while still logged in.
+      try {
+        await deleteRemoteState(currentUser.uid);
+      } catch (err) {
+        console.warn("刪除雲端帳號資料失敗", err);
+      }
+      try {
+        currentUser = await signOutToLocal();
+      } catch (err) {
+        console.warn("登出失敗", err);
+      }
+    }
+
     localStorage.removeItem(STORAGE_KEY);
     state = settleStamina(loadState());
     selection = emptySelection();
@@ -728,35 +1336,12 @@ function attachAccountMenuHandlers() {
     lastResult = null;
     resultStale = false;
     resultModalOpen = false;
+    accountMenuOpen = false;
     persist();
     render();
   });
 
-  document.querySelector<HTMLButtonElement>("#google-signin-btn")?.addEventListener("click", async () => {
-    if (currentUser && isGoogleLinked(currentUser)) return;
-    const localPlayerName = state.playerName;
-    try {
-      syncNotice = t("noticeOpeningGoogle");
-      render();
-      const user = await signInWithGoogle();
-      currentUser = user;
-      const remote = await pullRemoteState(user.uid);
-      if (remote) {
-        state = remote;
-        // Don't let adopting a nameless remote profile erase a name the
-        // player had already set locally on this device.
-        if (!state.playerName && localPlayerName) state.playerName = localPlayerName;
-        syncNotice = t("noticeRestoredFromCloud");
-      } else {
-        syncNotice = t("noticeGoogleLinked");
-        persist();
-      }
-    } catch (err) {
-      console.warn("Google 登入失敗", err);
-      syncNotice = t("noticeGoogleSignInFailed");
-    }
-    render();
-  });
+  document.querySelector<HTMLButtonElement>("#google-signin-btn")?.addEventListener("click", handleGoogleSignInClick);
 
   document.querySelector<HTMLButtonElement>("#signout-btn")?.addEventListener("click", async () => {
     const ok = window.confirm(t("confirmSignOut"));
@@ -871,30 +1456,32 @@ function attachHistoryHandlers() {
 }
 
 function attachPlayHandlers() {
-  app.querySelectorAll<HTMLElement>(".pill-group").forEach((group) => {
-    const cat = group.dataset.category as Category;
-    group.querySelectorAll<HTMLButtonElement>(".pill").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const value = btn.dataset.value || "";
-        // No explicit "不選" pill anymore — clicking the already-selected
-        // option toggles it back off instead.
-        selection[cat] = selection[cat] === value ? null : value;
-        resultStale = true;
-        render();
-      });
-    });
-  });
-
-  app.querySelectorAll<HTMLButtonElement>("[data-slot-category]").forEach((btn) => {
+  app.querySelectorAll<HTMLButtonElement>(".pill").forEach((btn) => {
     btn.addEventListener("click", () => {
-      activeCategory = btn.dataset.slotCategory as Category;
+      const cat = btn.dataset.category as Category;
+      const value = btn.dataset.value || "";
+      // No explicit "不選" pill anymore — clicking the already-selected
+      // option toggles it back off instead.
+      selection[cat] = selection[cat] === value ? null : value;
+      resultStale = true;
       render();
     });
   });
 
-  app.querySelectorAll<HTMLButtonElement>("[data-tab-category]").forEach((btn) => {
+  // Clicking a slot narrows the (by-default all-mixed) material list down to
+  // just that category; clicking the already-active one clears the filter
+  // back to "show everything".
+  app.querySelectorAll<HTMLButtonElement>("[data-slot-category]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      activeCategory = btn.dataset.tabCategory as Category;
+      const cat = btn.dataset.slotCategory as Category;
+      activeCategory = activeCategory === cat ? null : cat;
+      render();
+    });
+  });
+
+  app.querySelectorAll<HTMLButtonElement>("[data-sort-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      materialSortMode = btn.dataset.sortMode as MaterialSortMode;
       render();
     });
   });
@@ -931,19 +1518,21 @@ function attachPlayHandlers() {
 
   document.querySelector<HTMLButtonElement>("#resolve-btn")?.addEventListener("click", async () => {
     insufficientStaminaFlash = false;
+    generationFailedFlash = false;
     if (!hasAnySelection(selection) || isResolving) return;
     const effectiveDuration = Math.min(durationUnits, maxSelectableUnits());
     if (effectiveDuration <= 0) return;
     isResolving = true;
     render();
-    const result = await resolveAction(state, selection, effectiveDuration);
+    const outcome = await resolveAction(state, selection, effectiveDuration);
     isResolving = false;
-    if (!result) {
-      insufficientStaminaFlash = true;
+    if (!outcome.ok) {
+      if (outcome.reason === "insufficient-stamina") insufficientStaminaFlash = true;
+      else generationFailedFlash = true;
       render();
       return;
     }
-    lastResult = result;
+    lastResult = outcome.result;
     resultModalOpen = true;
     // 素材選擇每次事件後自動回歸預設,時間長度則保留給下一次沿用。
     selection = emptySelection();
@@ -954,6 +1543,7 @@ function attachPlayHandlers() {
 }
 
 render();
+loadAnnouncementAndMaybeShow();
 
 // Attached once to `document` (not re-attached per render, unlike the other
 // handlers) so it survives every innerHTML rebuild and can close the account

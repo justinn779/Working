@@ -9,6 +9,7 @@ interface ResolveEventRequest {
   labels: Partial<Record<Category, Localized | null>>;
   durationUnits: number;
   playerName: string;
+  jobTitle: Localized;
 }
 
 const resolveEventCallable = httpsCallable<ResolveEventRequest, GameEvent>(
@@ -24,7 +25,8 @@ export async function generateEventRemote(
   selection: Selection,
   durationUnits: number,
   playerName: string,
-  knownMaterials: KnownMaterials
+  knownMaterials: KnownMaterials,
+  jobTitle: Localized
 ): Promise<GameEvent> {
   const labels = Object.fromEntries(
     CATEGORY_ORDER.map((cat) => [
@@ -33,6 +35,6 @@ export async function generateEventRemote(
     ])
   ) as Partial<Record<Category, Localized | null>>;
 
-  const result = await resolveEventCallable({ selection, labels, durationUnits, playerName });
+  const result = await resolveEventCallable({ selection, labels, durationUnits, playerName, jobTitle });
   return result.data;
 }

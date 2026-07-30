@@ -1,7 +1,8 @@
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { deleteDoc, doc, getDoc, setDoc } from "firebase/firestore";
 import type { KnownMaterials } from "./combo";
 import { db } from "./firebase";
-import type { GameEvent } from "./types";
+import type { GameEvent, Localized } from "./types";
+import { DEFAULT_JOB_TITLE } from "./state";
 import type { GameState } from "./state";
 
 const PLAYERS_COLLECTION = "players";
@@ -21,6 +22,27 @@ interface SyncedProfile {
   history: Record<string, number>;
   playerName: string;
   language: "zh" | "en";
+  /** Epoch ms the player confirmed the top-up terms modal, or null — a
+   * normal round-tripped preference (unlike the wallet balance below), so it
+   * follows the player across devices once Google-linked. */
+  consentAcceptedAt: number | null;
+  /** id of the last announcement this player permanently dismissed — also a
+   * normal round-tripped preference, same reasoning as consentAcceptedAt. */
+  dismissedAnnouncementId: string | null;
+  /** Current 職稱 (job title) — also a normal round-tripped preference; only
+   * ever changed client-side (via a generated event's newJobTitle), never by
+   * a Cloud Function, so it belongs here rather than in
+   * ServerOwnedWalletFields below. */
+  jobTitle: Localized;
+}
+
+/** Fields on the players/{uid} doc that only Cloud Functions ever write
+ * (see functions/src/topupService.ts's creditOrder). Declared here so
+ * pullRemoteState can read them without pretending they're part of
+ * SyncedProfile — they must never appear in toSyncedProfile/pushRemoteState,
+ * or a client push could clobber a real balance with a stale local mirror. */
+interface ServerOwnedWalletFields {
+  paidCoinBalance?: number;
 }
 
 function toSyncedProfile(state: GameState): SyncedProfile {
@@ -31,13 +53,16 @@ function toSyncedProfile(state: GameState): SyncedProfile {
     history: state.personalDiscoveredAt,
     playerName: state.playerName,
     language: state.language,
+    consentAcceptedAt: state.consentAcceptedAt,
+    dismissedAnnouncementId: state.dismissedAnnouncementId,
+    jobTitle: state.jobTitle,
   };
 }
 
 export async function pullRemoteState(uid: string): Promise<GameState | null> {
   const snap = await getDoc(doc(db, PLAYERS_COLLECTION, uid));
   if (!snap.exists()) return null;
-  const profile = snap.data() as SyncedProfile;
+  const profile = snap.data() as SyncedProfile & ServerOwnedWalletFields;
   const history = profile.history ?? {};
   const comboKeys = Object.keys(history);
 
@@ -81,12 +106,29 @@ export async function pullRemoteState(uid: string): Promise<GameState | null> {
     // A remote profile only ever exists for a returning player — never show
     // the first-time tutorial to someone pulling down existing progress.
     hasSeenTutorial: true,
+    wallet: { paidCoinBalance: profile.paidCoinBalance ?? 0 },
+    consentAcceptedAt: profile.consentAcceptedAt ?? null,
+    dismissedAnnouncementId: profile.dismissedAnnouncementId ?? null,
+    jobTitle: profile.jobTitle ?? DEFAULT_JOB_TITLE,
   };
 }
 
-/** Fire-and-forget: local play should never block on network sync. */
+/** Fire-and-forget: local play should never block on network sync.
+ * `merge: true` is required here — toSyncedProfile never includes the
+ * server-owned wallet fields, and without merge a plain setDoc would
+ * overwrite the whole document, deleting whatever balance a Cloud Function
+ * had just credited. */
 export function pushRemoteState(uid: string, state: GameState): void {
-  setDoc(doc(db, PLAYERS_COLLECTION, uid), toSyncedProfile(state)).catch((err) => {
+  setDoc(doc(db, PLAYERS_COLLECTION, uid), toSyncedProfile(state), { merge: true }).catch((err) => {
     console.warn("雲端同步失敗(不影響本機遊玩)", err);
   });
+}
+
+/** Permanently removes this player's cloud profile document — used by
+ * "刪除帳號" (Delete Account), not the same as pushRemoteState with an empty
+ * state: that would leave a doc behind holding blank data forever, whereas
+ * this actually deletes it. Awaited (not fire-and-forget) since the caller
+ * needs to know it finished before signing out. */
+export async function deleteRemoteState(uid: string): Promise<void> {
+  await deleteDoc(doc(db, PLAYERS_COLLECTION, uid));
 }
