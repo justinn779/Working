@@ -99,10 +99,10 @@ let insufficientStaminaFlash = false;
  * nothing happened and that trying again is the right move. */
 let generationFailedFlash = false;
 let isResolving = false;
-/** Units above which starting an event needs an extra confirmation tap —
- * 6 units = 60 minutes, easy to bump past accidentally while dragging the
+/** Units at/above which starting an event needs an extra confirmation tap —
+ * 3 units = 30 minutes, easy to bump past accidentally while dragging the
  * time slider, and the AI generation can't be cancelled once started. */
-const LONG_DURATION_CONFIRM_THRESHOLD_UNITS = 6;
+const LONG_DURATION_CONFIRM_THRESHOLD_UNITS = 3;
 let longDurationConfirmOpen = false;
 let pendingResolveDuration: number | null = null;
 let currentUser: User | null = null;
@@ -1565,7 +1565,7 @@ function attachPlayHandlers() {
     if (!hasAnySelection(selection) || isResolving) return;
     const effectiveDuration = Math.min(durationUnits, maxSelectableUnits());
     if (effectiveDuration <= 0) return;
-    if (effectiveDuration > LONG_DURATION_CONFIRM_THRESHOLD_UNITS) {
+    if (effectiveDuration >= LONG_DURATION_CONFIRM_THRESHOLD_UNITS) {
       pendingResolveDuration = effectiveDuration;
       longDurationConfirmOpen = true;
       render();
