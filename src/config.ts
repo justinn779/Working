@@ -6,7 +6,9 @@ export const UNIT_MINUTES = 10;
 /** Cumulative in-game time cap: 8 hours worth of 10-minute units. */
 export const MAX_STAMINA_UNITS = (8 * 60) / UNIT_MINUTES; // 48
 
-/** Real-world minutes that must pass to regenerate a single stamina unit. */
-export const REGEN_MINUTES_PER_UNIT = 3;
+/** Real-world minutes that must pass to regenerate a single stamina unit —
+ * kept equal to UNIT_MINUTES so regeneration tracks real time 1:1 (1 real
+ * minute restores 1 in-game minute), rather than at some other rate. */
+export const REGEN_MINUTES_PER_UNIT = UNIT_MINUTES;
 
 export const STORAGE_KEY = "workplace-game-state-v1";

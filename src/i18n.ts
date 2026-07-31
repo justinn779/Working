@@ -44,7 +44,7 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   tutorialFinish: { zh: "開始遊玩", en: "Start Playing" },
   tutorialNext: { zh: "下一步", en: "Next" },
   tutorialStep1: {
-    zh: "先從「人、事、地、物」挑至少一項素材,點一下對應的格子就能選(可以只選一項)。",
+    zh: "先從「人、事、地、物」挑至少一項要素,點一下對應的格子就能選(可以只選一項)。",
     en: "Start by picking at least one material from Person / Matter / Place / Object — tap a slot to choose (one is enough).",
   },
   tutorialStep2: {
@@ -52,7 +52,7 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
     en: "Drag the time bar to decide how long to spend on it.",
   },
   tutorialStep3: {
-    zh: "按下「開始」,系統會生成一段職場事件,還會順便幫你解鎖一個新素材。",
+    zh: "按下「開始」,系統會生成一段職場事件,還會順便幫你解鎖一個新要素。",
     en: "Press Start — the system generates a workplace event and unlocks a new material along the way.",
   },
   tutorialStep4: {
@@ -100,11 +100,11 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   unselected: { zh: "未選", en: "Unselected" },
   youFallback: { zh: "你", en: "You" },
 
-  allMaterialsHint: { zh: "顯示全部素材,點上方任一格可篩選單一類別", en: "Showing all materials — tap a slot above to filter by one category" },
+  allMaterialsHint: { zh: "顯示全部要素,點上方任一格可篩選單一類別", en: "Showing all materials — tap a slot above to filter by one category" },
   filteredByHint: { zh: "只顯示「{category}」,再點一次取消篩選", en: "Showing only \"{category}\" — tap again to clear" },
   sortByLabelBtn: { zh: "文字排序", en: "By Name" },
   sortByUnlockOrderBtn: { zh: "獲得順序", en: "By Unlock Order" },
-  noUnlockedMaterials: { zh: "目前沒有可選的素材", en: "No materials unlocked yet" },
+  noUnlockedMaterials: { zh: "目前沒有可選的要素", en: "No materials unlocked yet" },
 
   firstDiscovery: { zh: "首次發現", en: "First Discovery" },
   repeatEvent: { zh: "重複事件", en: "Repeat Event" },
@@ -112,13 +112,13 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   discovererLine: { zh: "發現人:{name} · {time}", en: "Discovered by: {name} · {time}" },
   closeBtn: { zh: "關閉", en: "Close" },
   newUnlockPrefix: { zh: "🎉 解鎖新選項", en: "🎉 New Unlock" },
-  featuredPrefix: { zh: "🏷 這次的關鍵素材", en: "🏷 Featured This Time" },
+  featuredPrefix: { zh: "🏷 這次的關鍵要素", en: "🏷 Featured This Time" },
 
   noMaterialsTag: { zh: "沒有指定人事地物", en: "No materials specified" },
   emptyHistory: { zh: "還沒有收集到任何事件,回去試試看吧!", en: "No events collected yet — go find some!" },
   noMatchingHistory: { zh: "沒有符合條件的事件。", en: "No events match your filters." },
   historySearchPlaceholder: {
-    zh: "搜尋標題、內容、素材、發現人…",
+    zh: "搜尋標題、內容、要素、發現人…",
     en: "Search title, content, materials, discoverer…",
   },
   clearSearchTitle: { zh: "清除搜尋", en: "Clear search" },
