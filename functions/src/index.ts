@@ -88,6 +88,11 @@ interface FeaturedRef {
   category: Category;
   optionId: string;
   label: Localized;
+  /** Short standalone blurb (~10-30 zh chars) describing what this
+   * AI-invented material actually is — independent of any specific event's
+   * story text, so a player can look it up later without re-reading the
+   * story that discovered it. */
+  description: Localized;
 }
 
 interface StoredEvent {
@@ -258,6 +263,8 @@ ${selectedLines || `(${PLAYER_TOKEN}這次沒有指定任何人事地物)`}
 
 除此之外,請你自己發明${CATEGORY_HINT[biasedCategory]}名稱限4到10字。發明的東西類別一定要精準符合上面的定義,不要把其他類別的東西誤標成這一類。把它當成情節裡真實存在、合理發生的一部分,跟其他情境元素一起自然發展,不能只在結尾補一句無關的話帶過。這個新素材最好跟現有情境元素有點關聯,但不要跟上面已經指定的元素重複或雷同。這個新素材絕大多數時候(大約八到九成)都應該是道地的職場相關東西,只有少數時候(大約一到兩成,不要更多)才適合讓生活裡的人事物(家人、寵物、興趣之類)登場——這是偶爾出現的意外感,不是常態,不要每次都發明生活化的東西,也不要每次都是同一種職場老梗。
 
+另外請你額外用一句話(繁體中文10到30字,英文對應長度)簡單說明這個新發明的要素本身是什麼——這是獨立於故事情節之外的簡短定義,讓玩家之後在圖鑑裡不用重看故事也能一眼看懂這個要素的性質,不要重複故事內容,也不要包含「${PLAYER_TOKEN}」這個字串。
+
 ${buildJobTitleSection(jobTitle)}
 
 ${PLAYER_TOKEN}這次決定投入 ${minutes} 分鐘處理這件事。${DURATION_NARRATIVE_HINT[tier]}這個時間長度必須實際反映在故事的份量上——事件的複雜度、過程的曲折程度、結果的影響力都要跟著時間長短調整,不可以不管時間長短都寫成差不多份量的故事,也不能只是把分鐘數字寫進句子裡交差了事。
@@ -269,11 +276,12 @@ ${PLAYER_TOKEN}這次決定投入 ${minutes} 分鐘處理這件事。${DURATION_
 中文描述內文必須逐字出現你發明的新素材的中文名稱,英文描述內文也必須逐字出現(忽略大小寫)該素材的英文名稱。兩種語言的描述裡,只要提到主角,都必須原封不動寫「${PLAYER_TOKEN}」這個字串本身,不要翻譯它、不要加引號、不要改寫成任何其他稱呼或姓名。
 
 請「只」回覆下面這個 JSON 格式,不要加任何說明文字,也不要用 markdown code block 包起來:
-{"newMaterial": {"zh": "你發明的新素材中文名稱(4到10字)", "en": "same material's English name"}, "title": {"zh": "中文標題(4到10字)", "en": "English title"}, "description": {"zh": "中文描述(${DURATION_LENGTH_HINT[tier]}字,長度必須符合上面的時間長度說明)", "en": "English description, similar length and tone"}, "newJobTitle": {"zh": "新職稱中文(2到8字)", "en": "new job title in English"} 或 JSON null}`;
+{"newMaterial": {"zh": "你發明的新素材中文名稱(4到10字)", "en": "same material's English name"}, "materialDescription": {"zh": "這個新素材本身是什麼的簡短定義(10到30字)", "en": "short standalone definition of the new material, similar length and tone"}, "title": {"zh": "中文標題(4到10字)", "en": "English title"}, "description": {"zh": "中文描述(${DURATION_LENGTH_HINT[tier]}字,長度必須符合上面的時間長度說明)", "en": "English description, similar length and tone"}, "newJobTitle": {"zh": "新職稱中文(2到8字)", "en": "new job title in English"} 或 JSON null}`;
 }
 
 interface RawGenerationResult {
   newMaterial: Localized;
+  materialDescription: Localized;
   title: Localized;
   description: Localized;
   newJobTitle: Localized | null;
@@ -292,8 +300,13 @@ function extractJson(text: string): RawGenerationResult {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("AI 回覆中找不到 JSON 內容");
   const parsed = JSON.parse(match[0]);
-  if (!isLocalized(parsed.newMaterial) || !isLocalized(parsed.title) || !isLocalized(parsed.description)) {
-    throw new Error("AI 回覆的 JSON 缺少雙語的 newMaterial、title 或 description");
+  if (
+    !isLocalized(parsed.newMaterial) ||
+    !isLocalized(parsed.materialDescription) ||
+    !isLocalized(parsed.title) ||
+    !isLocalized(parsed.description)
+  ) {
+    throw new Error("AI 回覆的 JSON 缺少雙語的 newMaterial、materialDescription、title 或 description");
   }
   // newJobTitle is optional/nullable by design (see buildJobTitleSection) —
   // only reject the response if it's present but malformed (neither null
@@ -303,6 +316,7 @@ function extractJson(text: string): RawGenerationResult {
   }
   return {
     newMaterial: parsed.newMaterial,
+    materialDescription: parsed.materialDescription,
     title: parsed.title,
     description: parsed.description,
     newJobTitle: parsed.newJobTitle ?? null,
@@ -340,6 +354,15 @@ async function tryGenerate(
   if (newMaterial.zh.length < 2 || newMaterial.zh.length > 12) return null;
   if (newMaterial.en.length < 2 || newMaterial.en.length > 40) return null;
   if (looksLikeMiscategorizedPerson(biasedCategory, newMaterial)) return null;
+  // Instructed as "10到30字" — validated with slack on both sides (like
+  // newMaterial's own 4-10 instructed / 2-12 validated gap above) so a
+  // near-miss length doesn't burn a retry over something still perfectly usable.
+  const materialDescription: Localized = {
+    zh: parsed.materialDescription.zh.trim(),
+    en: parsed.materialDescription.en.trim(),
+  };
+  if (materialDescription.zh.length < 6 || materialDescription.zh.length > 40) return null;
+  if (materialDescription.en.length < 6 || materialDescription.en.length > 160) return null;
   // Guards against the rare case where the model ignores the "must appear
   // verbatim" instruction — only honor a generation that actually did it, in
   // both languages independently (English compared case-insensitively).
@@ -369,6 +392,7 @@ async function tryGenerate(
       category: biasedCategory,
       optionId: `${biasedCategory}_${sanitizeForId(newMaterial.zh)}`,
       label: newMaterial,
+      description: materialDescription,
     },
     newJobTitle,
   };

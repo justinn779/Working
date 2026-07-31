@@ -122,6 +122,12 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   clearSearchTitle: { zh: "清除搜尋", en: "Clear search" },
   filterAllOption: { zh: "{category}:全部", en: "{category}: All" },
 
+  historySubTabEvents: { zh: "事件", en: "Events" },
+  historySubTabMaterials: { zh: "要素", en: "Materials" },
+  materialHowLabel: { zh: "🔍 怎麼發現的", en: "🔍 How it was discovered" },
+  materialSeedTag: { zh: "🎒 起始要素,一開始就擁有", en: "🎒 Starting material — you begin with this" },
+  materialNoDescription: { zh: "(尚無說明)", en: "(No description yet)" },
+
   unitsSuffix: { zh: "{n} 單位", en: "{n} Units" },
   notAvailable: { zh: "尚未開放", en: "Not Available Yet" },
 

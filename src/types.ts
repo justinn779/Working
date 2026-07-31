@@ -30,6 +30,12 @@ export interface GameOption {
   id: string;
   category: Category;
   label: Localized;
+  /** Short standalone blurb (~10-30 zh chars) describing what this material
+   * actually is — independent of any specific event's story text. Optional:
+   * seed options carry a hand-authored one, AI-invented materials carry one
+   * generated alongside their name (see functions/src/index.ts), and a
+   * legacy pre-rearchitecture material may have neither. */
+  description?: Localized;
 }
 
 export interface UnlockRef {
@@ -39,6 +45,9 @@ export interface UnlockRef {
    * functions/src/index.ts — so this pair is always internally consistent,
    * not independently re-invented per language. */
   label: Localized;
+  /** See GameOption.description — optional because events cached before
+   * this field existed won't have it. */
+  description?: Localized;
 }
 
 export interface GameEvent {

@@ -42,8 +42,23 @@ const LEGACY_OPTION_LABELS: Record<string, { category: Category; label: Localize
 
 /** AI-invented materials (see functions/src/index.ts) aren't in any fixed
  * catalog, so resolving one by id needs the player's own knownMaterials map
- * (GameState.knownMaterials) as a fallback once the static seed list misses. */
-export type KnownMaterials = Record<string, { category: Category; label: Localized }>;
+ * (GameState.knownMaterials) as a fallback once the static seed list misses.
+ * description/discovererName/discoveredAt/comboKey are all optional because
+ * a save recorded before those fields existed will only have category+label. */
+export interface MaterialRecord {
+  category: Category;
+  label: Localized;
+  description?: Localized;
+  /** Who/when/via-which-combo this material was first ever discovered
+   * (globally) — mirrors the discovering event's own discovererName/
+   * discoveredAt/comboKey, since a material is always invented alongside
+   * the one event that first produced it (see functions/src/index.ts). */
+  discovererName?: string;
+  discoveredAt?: number;
+  comboKey?: string;
+}
+
+export type KnownMaterials = Record<string, MaterialRecord>;
 
 export function getOptionById(id: string, knownMaterials?: KnownMaterials): GameOption | undefined {
   const seed = OPTIONS_BY_ID[id];
@@ -54,7 +69,7 @@ export function getOptionById(id: string, knownMaterials?: KnownMaterials): Game
   // their own knownMaterials, which would otherwise permanently shadow the
   // legacy lookup below for that id.
   const known = knownMaterials?.[id];
-  if (known?.label?.zh) return { id, category: known.category, label: known.label };
+  if (known?.label?.zh) return { id, category: known.category, label: known.label, description: known.description };
   const legacy = LEGACY_OPTION_LABELS[id];
   return legacy ? { id, category: legacy.category, label: legacy.label } : undefined;
 }

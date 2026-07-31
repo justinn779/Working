@@ -1,6 +1,7 @@
+import type { KnownMaterials } from "./combo";
 import { MAX_STAMINA_UNITS, REGEN_MINUTES_PER_UNIT, STORAGE_KEY } from "./config";
 import { SEED_OPTIONS } from "./data/options";
-import type { Category, GameEvent, Localized } from "./types";
+import type { GameEvent, Localized } from "./types";
 
 export interface GameState {
   /** UI + generated-content language. Defaults to "zh"; main.ts overrides
@@ -21,12 +22,13 @@ export interface GameState {
    * login state, and sent as the discovererName on newly generated events.
    * Empty string means "not set yet", which the UI treats as required input. */
   playerName: string;
-  /** Label/category for every AI-invented material this player has ever
-   * unlocked, keyed by id — there's no fixed catalog to look these up in
-   * (see functions/src/index.ts), so once discovered they're remembered
-   * here for rendering pills and decoding comboKeys. Populated by
-   * recordEvent from each event's featuredOption. */
-  knownMaterials: Record<string, { category: Category; label: Localized }>;
+  /** Label/category/description/discovery-info for every AI-invented
+   * material this player has ever unlocked, keyed by id — there's no fixed
+   * catalog to look these up in (see functions/src/index.ts), so once
+   * discovered they're remembered here for rendering pills, decoding
+   * comboKeys, and the 歷史 tab's 要素 sub-tab. Populated by recordEvent from
+   * each event's featuredOption. */
+  knownMaterials: KnownMaterials;
   /** Whether the one-time gameplay tutorial has been shown — fires once,
    * right after the player sets their 入職名稱 for the very first time. */
   hasSeenTutorial: boolean;
@@ -222,6 +224,10 @@ export function recordEvent(state: GameState, event: GameEvent): { isNewDiscover
     state.knownMaterials[event.featuredOption.optionId] = {
       category: event.featuredOption.category,
       label: event.featuredOption.label,
+      description: event.featuredOption.description,
+      discovererName: event.discovererName,
+      discoveredAt: event.discoveredAt,
+      comboKey: event.comboKey,
     };
   }
   return { isNewDiscovery };
