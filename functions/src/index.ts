@@ -3,13 +3,15 @@ import { defineSecret } from "firebase-functions/params";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import OpenAI from "openai";
+import { notifyTelegram, TELEGRAM_SECRETS } from "./telegram";
 
 initializeApp();
 const db = getFirestore();
 
-export { createTopupOrder, captureTopupOrder, getOrderStatus, exchangeCoinsForStamina } from "./topupHandlers";
+export { createTopupOrder, captureTopupOrder, getOrderStatus, exchangeCoinsForStamina, usePotion } from "./topupHandlers";
 export { paypalWebhook } from "./paypalWebhook";
 export { adminRefundOrder, adminAdjustCoins, adminSetPaymentReview, adminReconcile } from "./adminHandlers";
+export { notifyPlayerRegistered } from "./playerHandlers";
 
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -39,12 +41,20 @@ const CATEGORY_LABEL: Record<Category, string> = {
  * loose in practice: the model would sometimes invent an event/document/place
  * and label it "人" anyway (e.g. "會議記錄器"、"團隊合作協議" showing up under
  * 人). Spelling out what counts and what doesn't, with concrete examples,
- * keeps the invented item's category honest. */
+ * keeps the invented item's category honest.
+ *
+ * Examples are still overwhelmingly office jargon on purpose — only one
+ * personal-life example per category, matching the "an occasional minority
+ * (1-2成), not a coin flip" ratio spelled out in buildPrompt's invention
+ * paragraph below. An earlier version gave office and personal examples
+ * equal billing and the model overcorrected into inventing almost nothing
+ * but cafés/parks/friends every time — the fix is fewer non-office examples
+ * and an explicit ratio, not removing them outright. */
 const CATEGORY_HINT: Record<Category, string> = {
-  person: "一個「人」——具體的人物身份或角色,例如工讀生、神秘清潔阿姨、總經理、已離職的前同事之類。不能是活動、地點、物品或抽象概念。",
-  matter: "一件「事」——正在進行或即將發生的任務、活動、事件,例如加班趕案子、提案簡報、內部檢舉之類。不能是人物、地點或物品。",
-  place: "一個「地」——具體的實體場所或空間,例如電梯、頂樓天台、老闆辦公室之類。不能是人物、事件、物品或抽象概念。",
-  object: "一個「物」——具體的實體物品或東西,例如簡報檔案、辭職信、樂透彩券之類。不能是人物、地點或事件。",
+  person: "一個「人」——具體的人物身份或角色,例如工讀生、神秘清潔阿姨、總經理、已離職的前同事之類的職場角色,偶爾也可以是家人、朋友這類跟職場無關的人。不能是活動、地點、物品或抽象概念。",
+  matter: "一件「事」——正在進行或即將發生的任務、活動、事件,例如加班趕案子、提案簡報、內部檢舉之類的職場事務,偶爾也可以是私人生活裡的小事。不能是人物、地點或物品。",
+  place: "一個「地」——具體的實體場所或空間,例如電梯、頂樓天台、老闆辦公室之類的職場空間,偶爾也可以是住家附近之類跟職場無關的地方。不能是人物、事件、物品或抽象概念。",
+  object: "一個「物」——具體的實體物品或東西,例如簡報檔案、辭職信、樂透彩券之類的職場物品,偶爾也可以是私人物品。不能是人物、地點或事件。",
 };
 
 interface Selection {
@@ -243,10 +253,10 @@ function buildPrompt(
     .map((cat) => `${CATEGORY_LABEL[cat]}:${labels[cat]!.zh} (${labels[cat]!.en})`)
     .join("\n");
 
-  return `你是「職場大小事」文字遊戲的事件生成器。這次故事的主角要用一個固定代稱「${PLAYER_TOKEN}」稱呼——這個代稱之後會被系統自動換成每一位玩家自己的名字,所以絕對不能寫成「玩家」、「the player」,也不能自己發明或猜測任何具體的真人姓名,一律原封不動使用「${PLAYER_TOKEN}」這個字串(包含大括號本身)。主角這次指定了以下情境元素(中文名稱後面括號是對應的英文名稱):
+  return `你是「工作大小事」文字遊戲的事件生成器。這次故事的主角要用一個固定代稱「${PLAYER_TOKEN}」稱呼——這個代稱之後會被系統自動換成每一位玩家自己的名字,所以絕對不能寫成「玩家」、「the player」,也不能自己發明或猜測任何具體的真人姓名,一律原封不動使用「${PLAYER_TOKEN}」這個字串(包含大括號本身)。主角這次指定了以下情境元素(中文名稱後面括號是對應的英文名稱):
 ${selectedLines || `(${PLAYER_TOKEN}這次沒有指定任何人事地物)`}
 
-除此之外,請你自己發明${CATEGORY_HINT[biasedCategory]}名稱限4到10字。發明的東西類別一定要精準符合上面的定義,不要把其他類別的東西誤標成這一類。把它當成情節裡真實存在、合理發生的一部分,跟其他情境元素一起自然發展,不能只在結尾補一句無關的話帶過。這個新素材最好跟現有情境元素有點關聯,但不要跟上面已經指定的元素重複或雷同。
+除此之外,請你自己發明${CATEGORY_HINT[biasedCategory]}名稱限4到10字。發明的東西類別一定要精準符合上面的定義,不要把其他類別的東西誤標成這一類。把它當成情節裡真實存在、合理發生的一部分,跟其他情境元素一起自然發展,不能只在結尾補一句無關的話帶過。這個新素材最好跟現有情境元素有點關聯,但不要跟上面已經指定的元素重複或雷同。這個新素材絕大多數時候(大約八到九成)都應該是道地的職場相關東西,只有少數時候(大約一到兩成,不要更多)才適合讓生活裡的人事物(家人、寵物、興趣之類)登場——這是偶爾出現的意外感,不是常態,不要每次都發明生活化的東西,也不要每次都是同一種職場老梗。
 
 ${buildJobTitleSection(jobTitle)}
 
@@ -379,11 +389,12 @@ async function generateStory(
     if (result) return result;
   }
 
+  await notifyTelegram("🚨 GPT 事件生成連續 3 次都失敗(格式錯誤或內容驗證沒過),請檢查 OpenAI 那邊是否正常");
   throw new HttpsError("internal", "AI 沒有回覆有效內容,請再試一次");
 }
 
 export const resolveEvent = onCall(
-  { secrets: [OPENAI_API_KEY], region: "asia-east1", maxInstances: 5 },
+  { secrets: [OPENAI_API_KEY, ...TELEGRAM_SECRETS], region: "asia-east1", maxInstances: 5 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "請先登入(包含匿名登入)才能產生事件");
@@ -429,6 +440,16 @@ export const resolveEvent = onCall(
     // this doc — the last write wins. Acceptable for this game's scale;
     // switch to a transaction if that ever becomes a real concern.
     await docRef.set(event);
+
+    // Only reached once per genuinely-new combo (a cache hit returns early
+    // above), so this fires exactly once per real title change, not once
+    // per player who later replays the same cached story.
+    if (event.newJobTitle) {
+      await notifyTelegram(
+        `🎉 職稱異動\n玩家:${discovererName}\n${jobTitle.zh} → ${event.newJobTitle.zh}\n事件:${event.title.zh}`
+      );
+    }
+
     return event;
   }
 );

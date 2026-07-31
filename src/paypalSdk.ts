@@ -3,11 +3,11 @@
 // rather than pulling in a third-party @types package for one integration
 // point.
 
-/** Sandbox Client ID — safe to be public (that's how PayPal's own SDK is
+/** Live Client ID — safe to be public (that's how PayPal's own SDK is
  * designed to be embedded), unlike PAYPAL_CLIENT_SECRET which never leaves
- * Firebase Secret Manager. Swap for the Live Client ID (and flip the
- * backend's PAYPAL_ENV) when actually going live. */
-const PAYPAL_CLIENT_ID = "BAAwsChQ4dwpT0xyB4Xdr16FTNJO8kXj9tpQIJfIZ_zngORUUItrtqz2Qb8zI5jTSWOsIz3Z9THJWKT_Cw";
+ * Firebase Secret Manager. This project went live 2026-07-31; the backend's
+ * PAYPAL_ENV (functions/.env) was flipped to "live" in the same change. */
+const PAYPAL_CLIENT_ID = "BAAo1Vd2GnWUjFs2JGdHdRKY295nAN-_yDR1ZEw8B9no_Eh5CdxI_KT0CMoj1jXqONKqM7z6ANTertHMac";
 
 interface PaypalButtonsActions {
   order: { capture: () => Promise<unknown> };

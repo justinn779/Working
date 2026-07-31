@@ -1,6 +1,7 @@
 import { onRequest } from "firebase-functions/v2/https";
 import { getFirestore } from "firebase-admin/firestore";
 import { PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_WEBHOOK_ID, verifyWebhookSignature } from "./paypalClient";
+import { notifyTelegram, TELEGRAM_SECRETS } from "./telegram";
 import { captureAndCredit } from "./topupService";
 import { handlePaypalInitiatedRefund, recordDispute, resolveDispute } from "./refundService";
 
@@ -39,7 +40,7 @@ async function resolveOrderIdFromResource(resource: Record<string, unknown>): Pr
  * CUSTOMER.DISPUTE.* route into refundService.ts (Stage 4).
  */
 export const paypalWebhook = onRequest(
-  { region: "asia-east1", secrets: [PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_WEBHOOK_ID] },
+  { region: "asia-east1", secrets: [PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_WEBHOOK_ID, ...TELEGRAM_SECRETS] },
   async (req, res) => {
     const eventId = req.body?.id as string | undefined;
     if (!eventId) {
@@ -104,6 +105,9 @@ export const paypalWebhook = onRequest(
           errorMessage: `verification_status=${result.verificationStatus} configuredWebhookIdLength=${result.configuredWebhookIdLength}`,
           processedAt: Date.now(),
         });
+        await notifyTelegram(
+          `🚨 PayPal webhook 驗簽失敗\nevent id:${eventId}\nverification_status:${result.verificationStatus}`
+        );
         res.status(400).send("signature verification failed");
         return;
       }
@@ -142,6 +146,11 @@ export const paypalWebhook = onRequest(
               reason: (resource.reason as string) ?? "UNKNOWN",
               status: "OPEN",
             });
+            if (eventType === "CUSTOMER.DISPUTE.CREATED") {
+              await notifyTelegram(
+                `🚨 PayPal 爭議成立\n訂單:${orderId}\n玩家:${orderUserId}\n原因:${(resource.reason as string) ?? "UNKNOWN"}\n請盡快到後台處理,PayPal 通常有回應期限`
+              );
+            }
           } else {
             note = "找不到訂單對應的玩家,需人工核對";
           }
@@ -164,6 +173,9 @@ export const paypalWebhook = onRequest(
         retryCount: 1,
       });
       console.error("PayPal webhook 處理失敗", err);
+      await notifyTelegram(
+        `🚨 PayPal webhook 處理失敗\nevent id:${eventId}\n錯誤:${(err as Error)?.message ?? String(err)}`
+      );
       // 500 so PayPal retries/redelivers — the dedupe guard above means a
       // retry is safe, not a double-count risk.
       res.status(500).send("processing error");

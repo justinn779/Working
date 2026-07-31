@@ -1,8 +1,10 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { capturePaypalOrder, createPaypalOrder, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET } from "./paypalClient";
+import { TELEGRAM_SECRETS } from "./telegram";
 import {
   attachPaypalOrder,
   captureAndCredit,
+  consumePotion,
   createOrder,
   getOrder,
   markOrderFailed,
@@ -43,7 +45,7 @@ interface CaptureTopupOrderData {
 }
 
 export const captureTopupOrder = onCall(
-  { region: "asia-east1", maxInstances: 5, secrets: PAYPAL_SECRETS },
+  { region: "asia-east1", maxInstances: 5, secrets: [...PAYPAL_SECRETS, ...TELEGRAM_SECRETS] },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "請先登入才能確認付款");
     const data = request.data as CaptureTopupOrderData;
@@ -111,6 +113,29 @@ export const exchangeCoinsForStamina = onCall({ region: "asia-east1", maxInstanc
 
   try {
     return await spendCoins(request.auth.uid, data.units, `兌換 ${data.units} 單位工時`);
+  } catch (err) {
+    if (err instanceof TopupError) throw new HttpsError("failed-precondition", err.message);
+    throw err;
+  }
+});
+
+interface UsePotionData {
+  productId: string;
+}
+
+/** Each potion purchase only adds to an inventory count (see
+ * topupService.ts's creditOrder) — it does NOT grant stamina immediately.
+ * This is the separate redemption step, callable any time the player wants
+ * to drink one of their stockpiled potions. */
+export const usePotion = onCall({ region: "asia-east1", maxInstances: 5 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "請先登入才能使用藥水");
+  const data = request.data as UsePotionData;
+  if (!data?.productId || typeof data.productId !== "string") {
+    throw new HttpsError("invalid-argument", "缺少 productId");
+  }
+
+  try {
+    return await consumePotion(request.auth.uid, data.productId);
   } catch (err) {
     if (err instanceof TopupError) throw new HttpsError("failed-precondition", err.message);
     throw err;

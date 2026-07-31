@@ -51,10 +51,10 @@ body {
 
 .app-header {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px 16px;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 20px;
 }
 
@@ -204,17 +204,30 @@ section {
   flex-wrap: wrap;
 }
 
+/* A grid (not flex-wrap) so a row that doesn't fit breaks cleanly into an
+ * even 2x2 instead of flex's organic "3 fit, 1 spills to its own row". The
+ * column count itself is a content decision, not a screen-size one — a
+ * media/container query only knows the box's pixel width, never why it's
+ * tight (a 2-character vs. an 8-character label needs a completely
+ * different threshold) — so main.ts's slotGroupModeClass() picks the
+ * modifier class from the longest label actually being shown right now. */
 .slot-group {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   flex: 2;
   min-width: 220px;
-  flex-wrap: wrap;
+}
+
+.slot-group-2col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.slot-group-1col {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .slot {
-  flex: 1;
-  min-width: 64px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -223,9 +236,10 @@ section {
   background: #232734;
   color: var(--text);
   border-radius: 10px;
-  padding: 6px 8px;
+  padding: 6px 3px;
   cursor: pointer;
   transition: all 0.15s ease;
+  min-width: 0;
 }
 
 /* Same category colours as the pill list below (.pill-cat-*), so the slot a
@@ -310,9 +324,12 @@ section {
 .slot-value {
   font-size: 0.78rem;
   white-space: nowrap;
+  /* Each slot is a grid column now (see .slot-group), so this just needs to
+   * fill its own cell — ellipsis is a last-resort for names too long even
+   * for the 1-column fallback tier, not the normal case. */
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 90px;
 }
 
 .time-bar {
@@ -372,12 +389,28 @@ section {
   font-size: 0.95rem;
   font-weight: 700;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .resolve-btn-compact:disabled {
   background: #3a3f4d;
   color: var(--text-dim);
   cursor: not-allowed;
+}
+
+.spinner-icon {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Material picker: a flat, colour-coded pill list — every unlocked material
@@ -659,20 +692,45 @@ section {
 
 .market-product-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
 }
 
-.market-product-info {
+.market-product-name {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  cursor: help;
+}
+
+.market-product-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .market-product-row .market-buy-btn {
   width: auto;
-  padding: 8px 20px;
+  padding: 8px 16px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.market-owned {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.market-use-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
 }
 
 .market-divider {
@@ -696,6 +754,7 @@ section {
   font-size: 1.1rem;
   font-weight: 700;
   color: var(--accent);
+  white-space: nowrap;
 }
 
 .market-sub {
@@ -706,7 +765,7 @@ section {
 .market-price {
   font-size: 0.95rem;
   font-weight: 600;
-  margin: 6px 0;
+  white-space: nowrap;
 }
 
 .market-buy-btn {
@@ -892,6 +951,21 @@ section {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.activity-section-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.activity-section-body {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: pre-wrap;
 }
 
 .collection-entry-header {

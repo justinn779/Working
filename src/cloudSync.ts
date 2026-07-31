@@ -1,6 +1,7 @@
 import { deleteDoc, doc, getDoc, setDoc } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import type { KnownMaterials } from "./combo";
-import { db } from "./firebase";
+import { db, functions } from "./firebase";
 import type { GameEvent, Localized } from "./types";
 import { DEFAULT_JOB_TITLE } from "./state";
 import type { GameState } from "./state";
@@ -21,6 +22,11 @@ interface SyncedProfile {
   /** comboKey -> when *this* player first personally discovered it. */
   history: Record<string, number>;
   playerName: string;
+  /** Lowercased mirror of playerName, kept only so the admin dashboard's
+   * name search (a Firestore range query, which is a byte-order comparison
+   * with no case-folding) can match regardless of case — never read by the
+   * game itself. */
+  playerNameLower: string;
   language: "zh" | "en";
   /** Epoch ms the player confirmed the top-up terms modal, or null — a
    * normal round-tripped preference (unlike the wallet balance below), so it
@@ -43,6 +49,7 @@ interface SyncedProfile {
  * or a client push could clobber a real balance with a stale local mirror. */
 interface ServerOwnedWalletFields {
   paidCoinBalance?: number;
+  potions?: Record<string, number>;
 }
 
 function toSyncedProfile(state: GameState): SyncedProfile {
@@ -52,6 +59,7 @@ function toSyncedProfile(state: GameState): SyncedProfile {
     unlockedOptionIds: state.unlockedOptionIds,
     history: state.personalDiscoveredAt,
     playerName: state.playerName,
+    playerNameLower: state.playerName.toLowerCase(),
     language: state.language,
     consentAcceptedAt: state.consentAcceptedAt,
     dismissedAnnouncementId: state.dismissedAnnouncementId,
@@ -106,7 +114,7 @@ export async function pullRemoteState(uid: string): Promise<GameState | null> {
     // A remote profile only ever exists for a returning player — never show
     // the first-time tutorial to someone pulling down existing progress.
     hasSeenTutorial: true,
-    wallet: { paidCoinBalance: profile.paidCoinBalance ?? 0 },
+    wallet: { paidCoinBalance: profile.paidCoinBalance ?? 0, potions: profile.potions ?? {} },
     consentAcceptedAt: profile.consentAcceptedAt ?? null,
     dismissedAnnouncementId: profile.dismissedAnnouncementId ?? null,
     jobTitle: profile.jobTitle ?? DEFAULT_JOB_TITLE,
@@ -131,4 +139,20 @@ export function pushRemoteState(uid: string, state: GameState): void {
  * needs to know it finished before signing out. */
 export async function deleteRemoteState(uid: string): Promise<void> {
   await deleteDoc(doc(db, PLAYERS_COLLECTION, uid));
+}
+
+const notifyPlayerRegisteredCallable = httpsCallable<{ playerName?: string }, { ok: boolean }>(
+  functions,
+  "notifyPlayerRegistered"
+);
+
+/** Fire-and-forget, same reasoning as pushRemoteState — this is purely an
+ * operator notification, never something the player's own flow should wait
+ * on or fail over. Call exactly once, right after linking Google for the
+ * first time (see main.ts's handleGoogleSignInClick — the "no existing
+ * remote profile" branch), never on every later sign-in. */
+export function notifyPlayerRegistered(playerName: string): void {
+  notifyPlayerRegisteredCallable({ playerName }).catch((err) => {
+    console.warn("新玩家註冊通知發送失敗(不影響遊玩)", err);
+  });
 }

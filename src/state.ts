@@ -31,12 +31,14 @@ export interface GameState {
    * right after the player sets their 入職名稱 for the very first time. */
   hasSeenTutorial: boolean;
   /** Read-only mirror of the player's PayPal top-up wallet
-   * (players/{uid}.paidCoinBalance in Firestore). Only Cloud Functions ever
-   * change the real balance — this local copy exists purely for display and
-   * is refreshed from cloudSync's pullRemoteState; nothing in this file
-   * mutates it, and pushRemoteState must never send it back to the server
-   * (see cloudSync.ts's toSyncedProfile). */
-  wallet: { paidCoinBalance: number };
+   * (players/{uid}.paidCoinBalance/.potions in Firestore). Only Cloud
+   * Functions ever change the real balance/inventory — this local copy
+   * exists purely for display and is refreshed from cloudSync's
+   * pullRemoteState; nothing in this file mutates it, and pushRemoteState
+   * must never send it back to the server (see cloudSync.ts's
+   * toSyncedProfile). `potions` is keyed by productId — how many of that
+   * potion this player currently owns, unused/unspent. */
+  wallet: { paidCoinBalance: number; potions: Record<string, number> };
   /** Epoch ms of when the player confirmed the top-up terms/consent modal —
    * null means never. Shown once (gates the first purchase), not required
    * again on every later purchase; the market page keeps a "查看條款" link
@@ -82,7 +84,7 @@ function freshState(): GameState {
     playerName: "",
     knownMaterials: {},
     hasSeenTutorial: false,
-    wallet: { paidCoinBalance: 0 },
+    wallet: { paidCoinBalance: 0, potions: {} },
     consentAcceptedAt: null,
     dismissedAnnouncementId: null,
     jobTitle: DEFAULT_JOB_TITLE,
@@ -130,7 +132,13 @@ export function loadState(): GameState {
     // wiping otherwise-valid progress. A real balance (if any) is restored
     // moments later for Google-linked players via cloudSync's pullRemoteState.
     if (typeof parsed.wallet !== "object" || parsed.wallet === null) {
-      parsed.wallet = { paidCoinBalance: 0 };
+      parsed.wallet = { paidCoinBalance: 0, potions: {} };
+    }
+    // Older saves predate the potion inventory — default to none rather
+    // than wiping otherwise-valid progress. A real inventory (if any) is
+    // restored moments later for Google-linked players via pullRemoteState.
+    if (typeof parsed.wallet.potions !== "object" || parsed.wallet.potions === null) {
+      parsed.wallet.potions = {};
     }
     // Older saves predate the consent modal — default to "never accepted"
     // so returning players still see it once before their first purchase.

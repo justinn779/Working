@@ -36,7 +36,9 @@ async function getAccessToken(): Promise<string> {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 30_000) {
     return cachedToken.value;
   }
-  const basicAuth = Buffer.from(`${PAYPAL_CLIENT_ID.value()}:${PAYPAL_CLIENT_SECRET.value()}`).toString("base64");
+  const basicAuth = Buffer.from(`${PAYPAL_CLIENT_ID.value().trim()}:${PAYPAL_CLIENT_SECRET.value().trim()}`).toString(
+    "base64"
+  );
   const res = await fetch(`${baseUrl()}/v1/oauth2/token`, {
     method: "POST",
     headers: {
@@ -186,7 +188,7 @@ export interface WebhookVerificationInput {
 export async function verifyWebhookSignature(
   input: WebhookVerificationInput
 ): Promise<{ verified: boolean; verificationStatus: string; configuredWebhookIdLength: number }> {
-  const webhookId = PAYPAL_WEBHOOK_ID.value();
+  const webhookId = PAYPAL_WEBHOOK_ID.value().trim();
   const res = await paypalFetch("/v1/notifications/verify-webhook-signature", {
     method: "POST",
     body: JSON.stringify({

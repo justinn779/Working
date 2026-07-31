@@ -1,7 +1,9 @@
 import { onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider } from "firebase/auth";
 import type { User } from "firebase/auth";
+import type { QueryDocumentSnapshot } from "firebase/firestore";
 import { auth } from "../firebase";
 import * as api from "./adminApi";
+import type { Campaign } from "../types";
 
 const app = document.querySelector<HTMLDivElement>("#admin-app")!;
 
@@ -51,12 +53,22 @@ let isAdmin: boolean | null = null;
 let authChecking = true;
 let signInError: string | null = null;
 
-type AdminTab = "orders" | "players" | "products" | "announcement" | "disputes" | "webhooks" | "reconcile" | "audit";
+type AdminTab =
+  | "orders"
+  | "players"
+  | "products"
+  | "announcement"
+  | "campaigns"
+  | "disputes"
+  | "webhooks"
+  | "reconcile"
+  | "audit";
 const TABS: { id: AdminTab; label: string }[] = [
   { id: "orders", label: "訂單" },
   { id: "players", label: "玩家" },
   { id: "products", label: "商品" },
   { id: "announcement", label: "公告" },
+  { id: "campaigns", label: "活動" },
   { id: "disputes", label: "爭議" },
   { id: "webhooks", label: "Webhook 紀錄" },
   { id: "reconcile", label: "對帳" },
@@ -79,6 +91,18 @@ let refundReasonDraft = "";
 let refundPartialDraft = "";
 let refundBusy = false;
 let refundMessage: string | null = null;
+
+// --- All Players tab (paginated browse — see api.fetchPlayersPage) ---
+let allPlayersRows: api.PlayerSearchResult[] = [];
+let allPlayersLoading = false;
+let allPlayersLoaded = false;
+let allPlayersError: string | null = null;
+let allPlayersHasMore = false;
+/** Cursor to fetch the CURRENT page (undefined = first page). Previous
+ * pages are cursors[0..N-2]; popping this stack is how "上一頁" works
+ * without a reverse query. */
+let allPlayersCursor: QueryDocumentSnapshot | undefined;
+let allPlayersCursorStack: (QueryDocumentSnapshot | undefined)[] = [];
 
 // --- Players tab ---
 let playerUidInput = "";
@@ -109,6 +133,30 @@ let announcementLoaded = false;
 let announcementCurrentMeta: { id: string; updatedAt: number } | null = null;
 let announcementMessage: string | null = null;
 let announcementBusy = false;
+
+// --- Campaigns tab ---
+let campaigns: Campaign[] = [];
+let campaignsLoaded = false;
+let campaignMessage: string | null = null;
+/** id of the campaign currently being saved/deleted, or "new" while
+ * creating — disables just that row/button, not the whole tab. */
+let campaignBusyId: string | null = null;
+/** null = list view; "new" = create form; an existing campaign's id = edit
+ * form for that campaign. */
+let editingCampaignId: string | null = null;
+let campaignDraft = {
+  titleZh: "",
+  titleEn: "",
+  contentZh: "",
+  contentEn: "",
+  goalZh: "",
+  goalEn: "",
+  rulesZh: "",
+  rulesEn: "",
+  rewardZh: "",
+  rewardEn: "",
+  enabled: true,
+};
 
 // --- Disputes / webhooks / audit tabs ---
 let disputes: api.Dispute[] = [];
@@ -162,7 +210,7 @@ function render() {
   if (!currentUser) {
     app.innerHTML = `
       <div class="admin-wrap admin-gate">
-        <h1>職場大小事 · 管理後台</h1>
+        <h1>工作大小事 · 管理後台</h1>
         <p class="admin-hint">請用管理員的 Google 帳號登入。</p>
         ${signInError ? `<p class="admin-error">${escapeHtml(signInError)}</p>` : ""}
         <button id="admin-signin-btn" class="admin-btn">登入 Google 帳號</button>
@@ -190,7 +238,7 @@ function render() {
   app.innerHTML = `
     <div class="admin-wrap">
       <div class="admin-header">
-        <h1>職場大小事 · 管理後台</h1>
+        <h1>工作大小事 · 管理後台</h1>
         <div>
           <span class="admin-hint">${escapeHtml(currentUser.email ?? currentUser.uid)}</span>
           <button id="admin-signout-btn" class="admin-btn admin-btn-secondary">登出</button>
@@ -228,6 +276,8 @@ function renderActiveTab(): string {
       return renderProductsTab();
     case "announcement":
       return renderAnnouncementTab();
+    case "campaigns":
+      return renderCampaignsTab();
     case "disputes":
       return renderDisputesTab();
     case "webhooks":
@@ -241,8 +291,10 @@ function renderActiveTab(): string {
 
 function loadDataForActiveTab() {
   if (activeTab === "orders" && !ordersLoaded) loadRecentOrders();
+  if (activeTab === "players" && !allPlayersLoaded) loadAllPlayersPage();
   if (activeTab === "products" && !productsLoaded) loadProducts();
   if (activeTab === "announcement" && !announcementLoaded) loadAnnouncement();
+  if (activeTab === "campaigns" && !campaignsLoaded) loadCampaigns();
   if (activeTab === "disputes" && !disputesLoaded) loadDisputes();
   if (activeTab === "webhooks" && !webhookLogsLoaded) loadWebhookLogs();
   if (activeTab === "audit" && !adminActionsLoaded) loadAdminActions();
@@ -482,7 +534,7 @@ function renderPlayersTab(): string {
   return `
     <div class="admin-section">
       <h2>查詢玩家</h2>
-      <p class="admin-hint">不知道 UID 的話,可以先用入職名稱搜尋(前綴比對,大小寫需完全相符)。</p>
+      <p class="admin-hint">不知道 UID 的話,可以先用入職名稱搜尋(前綴比對,不分大小寫)。</p>
       <div class="admin-row">
         <input id="player-name-input" class="admin-input" placeholder="入職名稱" value="${escapeHtml(playerNameSearchInput)}" />
         <button id="player-name-search-btn" class="admin-btn">依名稱搜尋</button>
@@ -565,6 +617,8 @@ function renderPlayersTab(): string {
           : ""
       }
     </div>
+
+    ${renderAllPlayersSection()}
   `;
 }
 
@@ -688,6 +742,95 @@ function attachPlayersTabHandlers() {
     }
     playerActionBusy = false;
     render();
+  });
+}
+
+// ==================== All Players (paginated) ====================
+
+/** `cursor: undefined` = first page; a defined cursor fetches whatever page
+ * follows it. Always call this rather than assigning allPlayersRows
+ * directly, so loading/error state and the cursor stack stay consistent. */
+async function loadAllPlayersPage(cursor?: QueryDocumentSnapshot) {
+  // No render() here before the await — render() unconditionally calls
+  // loadDataForActiveTab() at its end, which would call straight back into
+  // this same function (allPlayersLoaded is still false) before the first
+  // await ever yields, recursing synchronously until the stack overflows.
+  // Every other tab's loader in this file follows the same rule.
+  allPlayersLoading = true;
+  allPlayersError = null;
+  try {
+    const page = await api.fetchPlayersPage(cursor);
+    allPlayersRows = page.players;
+    allPlayersHasMore = page.hasMore;
+    allPlayersCursor = page.lastDoc ?? undefined;
+  } catch (err) {
+    allPlayersError = (err as Error).message;
+  }
+  allPlayersLoading = false;
+  allPlayersLoaded = true;
+  render();
+}
+
+function renderAllPlayersSection(): string {
+  return `
+    <div class="admin-section">
+      <h2>所有玩家(第 ${allPlayersCursorStack.length + 1} 頁,每頁 50 筆)</h2>
+      <p class="admin-hint">依 UID 排序分頁瀏覽,不會一次載入全部玩家。要找特定人,用上面的名稱/UID 搜尋更快。</p>
+      ${allPlayersError ? `<p class="admin-error">${escapeHtml(allPlayersError)}</p>` : ""}
+      ${allPlayersLoading ? `<p>載入中…</p>` : ""}
+      <table class="admin-table">
+        <thead><tr><th>UID</th><th>入職名稱</th><th>加班費餘額</th><th></th></tr></thead>
+        <tbody>
+          ${
+            allPlayersRows.length === 0 && !allPlayersLoading
+              ? `<tr><td colspan="4">沒有玩家資料</td></tr>`
+              : allPlayersRows
+                  .map(
+                    (p) => `
+            <tr>
+              <td>${escapeHtml(p.uid)}</td>
+              <td>${escapeHtml(p.playerName || "(未設定)")}</td>
+              <td>${p.paidCoinBalance}</td>
+              <td><button class="admin-btn admin-btn-secondary" data-select-all-player="${escapeHtml(p.uid)}">查看</button></td>
+            </tr>
+          `
+                  )
+                  .join("")
+          }
+        </tbody>
+      </table>
+      <div class="admin-row">
+        <button id="all-players-prev-btn" class="admin-btn admin-btn-secondary" ${allPlayersCursorStack.length === 0 || allPlayersLoading ? "disabled" : ""}>上一頁</button>
+        <button id="all-players-next-btn" class="admin-btn admin-btn-secondary" ${!allPlayersHasMore || allPlayersLoading ? "disabled" : ""}>下一頁</button>
+      </div>
+    </div>
+  `;
+}
+
+function attachAllPlayersTabHandlers() {
+  document.querySelectorAll<HTMLButtonElement>("[data-select-all-player]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const uid = btn.dataset.selectAllPlayer;
+      if (!uid) return;
+      activeTab = "players";
+      render();
+      loadPlayer(uid);
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>("#all-players-next-btn")?.addEventListener("click", () => {
+    if (!allPlayersHasMore || !allPlayersCursor) return;
+    allPlayersCursorStack.push(allPlayersCursor);
+    loadAllPlayersPage(allPlayersCursor);
+  });
+
+  document.querySelector<HTMLButtonElement>("#all-players-prev-btn")?.addEventListener("click", () => {
+    if (allPlayersCursorStack.length === 0) return;
+    // Pop the cursor that got us to the CURRENT page, then use whatever's
+    // now on top (or none, for page 1) to re-fetch the page before it.
+    allPlayersCursorStack.pop();
+    const prevCursor = allPlayersCursorStack[allPlayersCursorStack.length - 1];
+    loadAllPlayersPage(prevCursor);
   });
 }
 
@@ -881,6 +1024,203 @@ function attachAnnouncementTabHandlers() {
   });
 }
 
+// ==================== Campaigns ====================
+
+async function loadCampaigns() {
+  campaigns = await api.fetchAllCampaigns();
+  campaignsLoaded = true;
+  render();
+}
+
+function resetCampaignDraft() {
+  campaignDraft = {
+    titleZh: "",
+    titleEn: "",
+    contentZh: "",
+    contentEn: "",
+    goalZh: "",
+    goalEn: "",
+    rulesZh: "",
+    rulesEn: "",
+    rewardZh: "",
+    rewardEn: "",
+    enabled: true,
+  };
+}
+
+function renderCampaignsTab(): string {
+  if (!campaignsLoaded) return `<div class="admin-section"><p>載入中…</p></div>`;
+  return `
+    <div class="admin-section">
+      <h2>活動清單</h2>
+      <p class="admin-hint">每個活動都是自由文字(標題/內容/目標/說明/獎勵),遊戲不會自動判斷或發放獎勵——誰達成目標、獎勵怎麼給,都由你自己視每次活動的狀況判斷後手動處理(例如用「玩家」分頁調整加班費、或私訊聯絡)。</p>
+      ${campaignMessage ? `<p class="admin-notice">${escapeHtml(campaignMessage)}</p>` : ""}
+      <table class="admin-table">
+        <thead><tr><th>標題</th><th>啟用</th><th>上次更新</th><th></th></tr></thead>
+        <tbody>
+          ${
+            campaigns.length === 0
+              ? `<tr><td colspan="4">尚未建立任何活動</td></tr>`
+              : campaigns
+                  .map(
+                    (c) => `
+            <tr>
+              <td>${escapeHtml(c.title.zh)}</td>
+              <td>${c.enabled ? "是" : "否"}</td>
+              <td>${fmtTime(c.updatedAt)}</td>
+              <td>
+                <button class="admin-btn admin-btn-secondary" data-edit-campaign="${escapeHtml(c.id)}">編輯</button>
+                <button class="admin-btn admin-btn-secondary" data-delete-campaign="${escapeHtml(c.id)}" ${campaignBusyId === c.id ? "disabled" : ""}>刪除</button>
+              </td>
+            </tr>
+          `
+                  )
+                  .join("")
+          }
+        </tbody>
+      </table>
+
+      ${
+        editingCampaignId !== null
+          ? renderCampaignForm()
+          : `<button id="new-campaign-btn" class="admin-btn">新增活動</button>`
+      }
+    </div>
+  `;
+}
+
+function renderCampaignForm(): string {
+  const isNew = editingCampaignId === "new";
+  const busy = campaignBusyId === (isNew ? "new" : editingCampaignId);
+  return `
+    <h2>${isNew ? "新增活動" : "編輯活動"}</h2>
+    <div class="admin-row">
+      <input id="campaign-title-zh" class="admin-input" placeholder="活動標題(中)" value="${escapeHtml(campaignDraft.titleZh)}" />
+      <input id="campaign-title-en" class="admin-input" placeholder="活動標題(英)" value="${escapeHtml(campaignDraft.titleEn)}" />
+    </div>
+    <div class="admin-row">
+      <textarea id="campaign-content-zh" class="admin-input" placeholder="活動內容(中)">${escapeHtml(campaignDraft.contentZh)}</textarea>
+      <textarea id="campaign-content-en" class="admin-input" placeholder="活動內容(英)">${escapeHtml(campaignDraft.contentEn)}</textarea>
+    </div>
+    <div class="admin-row">
+      <textarea id="campaign-goal-zh" class="admin-input" placeholder="活動目標(中)">${escapeHtml(campaignDraft.goalZh)}</textarea>
+      <textarea id="campaign-goal-en" class="admin-input" placeholder="活動目標(英)">${escapeHtml(campaignDraft.goalEn)}</textarea>
+    </div>
+    <div class="admin-row">
+      <textarea id="campaign-rules-zh" class="admin-input" placeholder="活動說明(中)">${escapeHtml(campaignDraft.rulesZh)}</textarea>
+      <textarea id="campaign-rules-en" class="admin-input" placeholder="活動說明(英)">${escapeHtml(campaignDraft.rulesEn)}</textarea>
+    </div>
+    <div class="admin-row">
+      <textarea id="campaign-reward-zh" class="admin-input" placeholder="活動獎勵(中)">${escapeHtml(campaignDraft.rewardZh)}</textarea>
+      <textarea id="campaign-reward-en" class="admin-input" placeholder="活動獎勵(英)">${escapeHtml(campaignDraft.rewardEn)}</textarea>
+    </div>
+    <div class="admin-row">
+      <label class="admin-checkbox-row"><input type="checkbox" id="campaign-enabled" ${campaignDraft.enabled ? "checked" : ""} /> 啟用(玩家在「活動」分頁可見)</label>
+    </div>
+    <button id="campaign-save-btn" class="admin-btn" ${busy ? "disabled" : ""}>${busy ? "儲存中…" : "儲存"}</button>
+    <button id="campaign-cancel-btn" class="admin-btn admin-btn-secondary">取消</button>
+  `;
+}
+
+function readCampaignDraftFromForm() {
+  campaignDraft = {
+    titleZh: document.querySelector<HTMLInputElement>("#campaign-title-zh")?.value ?? "",
+    titleEn: document.querySelector<HTMLInputElement>("#campaign-title-en")?.value ?? "",
+    contentZh: document.querySelector<HTMLTextAreaElement>("#campaign-content-zh")?.value ?? "",
+    contentEn: document.querySelector<HTMLTextAreaElement>("#campaign-content-en")?.value ?? "",
+    goalZh: document.querySelector<HTMLTextAreaElement>("#campaign-goal-zh")?.value ?? "",
+    goalEn: document.querySelector<HTMLTextAreaElement>("#campaign-goal-en")?.value ?? "",
+    rulesZh: document.querySelector<HTMLTextAreaElement>("#campaign-rules-zh")?.value ?? "",
+    rulesEn: document.querySelector<HTMLTextAreaElement>("#campaign-rules-en")?.value ?? "",
+    rewardZh: document.querySelector<HTMLTextAreaElement>("#campaign-reward-zh")?.value ?? "",
+    rewardEn: document.querySelector<HTMLTextAreaElement>("#campaign-reward-en")?.value ?? "",
+    enabled: document.querySelector<HTMLInputElement>("#campaign-enabled")?.checked ?? true,
+  };
+}
+
+function attachCampaignsTabHandlers() {
+  document.querySelector<HTMLButtonElement>("#new-campaign-btn")?.addEventListener("click", () => {
+    resetCampaignDraft();
+    editingCampaignId = "new";
+    render();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-edit-campaign]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.editCampaign!;
+      const c = campaigns.find((x) => x.id === id);
+      if (!c) return;
+      campaignDraft = {
+        titleZh: c.title.zh,
+        titleEn: c.title.en,
+        contentZh: c.content.zh,
+        contentEn: c.content.en,
+        goalZh: c.goal.zh,
+        goalEn: c.goal.en,
+        rulesZh: c.rules.zh,
+        rulesEn: c.rules.en,
+        rewardZh: c.reward.zh,
+        rewardEn: c.reward.en,
+        enabled: c.enabled,
+      };
+      editingCampaignId = id;
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-delete-campaign]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.deleteCampaign!;
+      if (!window.confirm("確定要刪除這個活動嗎?")) return;
+      campaignBusyId = id;
+      render();
+      try {
+        await api.deleteCampaign(id);
+        campaignMessage = "活動已刪除";
+        campaigns = await api.fetchAllCampaigns();
+      } catch (err) {
+        campaignMessage = `刪除失敗:${(err as Error).message}`;
+      }
+      campaignBusyId = null;
+      render();
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>("#campaign-save-btn")?.addEventListener("click", async () => {
+    readCampaignDraftFromForm();
+    if (!campaignDraft.titleZh.trim()) return;
+    const isNew = editingCampaignId === "new";
+    const targetId = isNew ? null : editingCampaignId;
+    campaignBusyId = isNew ? "new" : editingCampaignId;
+    render();
+    try {
+      const existing = targetId ? campaigns.find((c) => c.id === targetId) : null;
+      await api.saveCampaign(targetId, {
+        title: { zh: campaignDraft.titleZh, en: campaignDraft.titleEn },
+        content: { zh: campaignDraft.contentZh, en: campaignDraft.contentEn },
+        goal: { zh: campaignDraft.goalZh, en: campaignDraft.goalEn },
+        rules: { zh: campaignDraft.rulesZh, en: campaignDraft.rulesEn },
+        reward: { zh: campaignDraft.rewardZh, en: campaignDraft.rewardEn },
+        enabled: campaignDraft.enabled,
+        createdAt: existing?.createdAt ?? Date.now(),
+        updatedAt: Date.now(),
+      });
+      campaignMessage = isNew ? "活動已新增" : "活動已儲存";
+      editingCampaignId = null;
+      campaigns = await api.fetchAllCampaigns();
+    } catch (err) {
+      campaignMessage = `儲存失敗:${(err as Error).message}`;
+    }
+    campaignBusyId = null;
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>("#campaign-cancel-btn")?.addEventListener("click", () => {
+    editingCampaignId = null;
+    render();
+  });
+}
+
 // ==================== Disputes (read-only) ====================
 
 async function loadDisputes(range?: api.DateRange) {
@@ -1059,9 +1399,13 @@ function renderAuditTab(): string {
 
 function attachTabHandlers() {
   if (activeTab === "orders") attachOrdersTabHandlers();
-  if (activeTab === "players") attachPlayersTabHandlers();
+  if (activeTab === "players") {
+    attachPlayersTabHandlers();
+    attachAllPlayersTabHandlers();
+  }
   if (activeTab === "products") attachProductsTabHandlers();
   if (activeTab === "announcement") attachAnnouncementTabHandlers();
+  if (activeTab === "campaigns") attachCampaignsTabHandlers();
   if (activeTab === "disputes") attachDisputesTabHandlers();
   if (activeTab === "webhooks") attachWebhooksTabHandlers();
   if (activeTab === "reconcile") attachReconcileTabHandlers();

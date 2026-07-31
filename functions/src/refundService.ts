@@ -1,5 +1,6 @@
 import { getFirestore } from "firebase-admin/firestore";
 import { refundCapture } from "./paypalClient";
+import { notifyTelegram } from "./telegram";
 import { canTransition, Dispute, LedgerEntry, OrderStatus, TopupOrder } from "./topupTypes";
 import { getOrder, TopupError } from "./topupService";
 
@@ -64,10 +65,13 @@ export async function refundOrder(
       failureReason: `PayPal 退款失敗(可重試):${(err as Error).message}`,
       updatedAt: Date.now(),
     });
+    await notifyTelegram(
+      `❌ 退款失敗\n訂單:${orderId}\n原因:${(err as Error).message}\n(訂單留在 REFUND_PENDING,可重新呼叫退款重試)`
+    );
     throw err;
   }
 
-  return db.runTransaction(async (tx) => {
+  const outcome = await db.runTransaction(async (tx) => {
     const snap = await tx.get(orderRef);
     const current = snap.data() as TopupOrder;
 
@@ -119,6 +123,13 @@ export async function refundOrder(
       paypalRefundId: refund.refundId,
     };
   });
+
+  if (outcome.shortfall > 0) {
+    await notifyTelegram(
+      `⚠️ 退款扣回不足,已標記複查\n訂單:${orderId}\n玩家:${outcome.order.userId}\n無法扣回:${outcome.shortfall} 點加班費`
+    );
+  }
+  return outcome;
 }
 
 /** Applies the same pooled-wallet clawback math as refundOrder, but for a
@@ -134,11 +145,11 @@ async function clawBackOrderCoins(
   targetStatus: OrderStatus
 ): Promise<void> {
   const orderRef = db.collection("orders").doc(orderId);
-  await db.runTransaction(async (tx) => {
+  const result = await db.runTransaction(async (tx) => {
     const snap = await tx.get(orderRef);
-    if (!snap.exists) return;
+    if (!snap.exists) return null;
     const order = snap.data() as TopupOrder;
-    if (order.status === targetStatus || order.status === "REFUNDED" || order.status === "CHARGEBACK") return;
+    if (order.status === targetStatus || order.status === "REFUNDED" || order.status === "CHARGEBACK") return null;
 
     const walletRef = db.collection("players").doc(order.userId);
     const walletSnap = await tx.get(walletRef);
@@ -172,7 +183,14 @@ async function clawBackOrderCoins(
     };
     tx.create(walletRef.collection("ledger").doc(), entry);
     tx.update(orderRef, { status: targetStatus, refundedAt: now, updatedAt: now });
+    return { shortfall, userId: order.userId };
   });
+
+  if (result && result.shortfall > 0) {
+    await notifyTelegram(
+      `⚠️ ${transactionType === "CHARGEBACK" ? "Chargeback" : "退款"}扣回不足,已標記複查\n訂單:${orderId}\n玩家:${result.userId}\n無法扣回:${result.shortfall} 點加班費`
+    );
+  }
 }
 
 /** PAYMENT.CAPTURE.REFUNDED / PAYMENT.CAPTURE.REVERSED webhook events —

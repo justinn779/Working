@@ -1,17 +1,24 @@
 import { fetchCurrentAnnouncement } from "./announcements";
-import { deleteRemoteState, pullRemoteState, pushRemoteState } from "./cloudSync";
+import { fetchActiveCampaigns } from "./campaigns";
+import { deleteRemoteState, notifyPlayerRegistered, pullRemoteState, pushRemoteState } from "./cloudSync";
 import { buildComboKey, decodeComboKey, getOptionById, hasAnySelection } from "./combo";
-import { MAX_STAMINA_UNITS, STORAGE_KEY, UNIT_MINUTES } from "./config";
+import { MAX_STAMINA_UNITS, REGEN_MINUTES_PER_UNIT, STORAGE_KEY, UNIT_MINUTES } from "./config";
 import { SEED_OPTIONS } from "./data/options";
 import { resolveAction, type ResolveResult } from "./eventEngine";
-import { ensureSignedIn, isGoogleLinked, signInWithGoogle, signOutToLocal } from "./firebase";
+import {
+  completeGoogleRedirectSignIn,
+  ensureSignedIn,
+  isGoogleLinked,
+  signInWithGoogle,
+  signOutToLocal,
+} from "./firebase";
 import { t as translate } from "./i18n";
 import {
   captureTopupOrder,
   createTopupOrder,
-  exchangeCoinsForStamina,
   getOrderStatus,
   listTopupProducts,
+  usePotion,
   type TopupOrder,
   type TopupProduct,
 } from "./paypalTopup";
@@ -26,7 +33,7 @@ import {
   type GameState,
 } from "./state";
 import { CATEGORY_LABEL, CATEGORY_ORDER, PLAYER_TOKEN } from "./types";
-import type { Announcement, Category, Localized, Selection } from "./types";
+import type { Announcement, Campaign, Category, Localized, Selection } from "./types";
 import type { User } from "firebase/auth";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -75,7 +82,7 @@ function emptySelection(): Selection {
   return { person: null, matter: null, place: null, object: null };
 }
 
-type View = "play" | "history" | "market";
+type View = "play" | "history" | "market" | "activities";
 
 let selection: Selection = emptySelection();
 let durationUnits = 1;
@@ -109,6 +116,9 @@ let currentUser: User | null = null;
 let syncNotice: string | null = null;
 let view: View = "play";
 let accountMenuOpen = false;
+/** Collapsed by default — the explanation only shows once the player taps
+ * the ❗ next to their job title, not every time they open the dropdown. */
+let jobTitleHintOpen = false;
 let nameModalOpen = false;
 /** false only for the forced first-time prompt (no playerName yet) — once a
  * name exists, reopening the modal to edit it can be cancelled. */
@@ -198,12 +208,23 @@ let activeCategory: Category | null = null;
 type MaterialSortMode = "label" | "unlockOrder";
 let materialSortMode: MaterialSortMode = "unlockOrder";
 
-// --- PayPal top-up (市集) state ---
+// --- Activities (活動) state ---
+let campaigns: Campaign[] | null = null;
+let campaignsLoading = false;
+let campaignsLoadError: string | null = null;
+/** comboKey-style expand/collapse, keyed by campaign id — collapsed by
+ * default so the tab reads as a scannable list of titles, same reasoning as
+ * the history tab's expandedHistoryKeys. */
+const expandedCampaignIds = new Set<string>();
+
+// --- PayPal top-up (商城) state ---
 let marketProducts: TopupProduct[] | null = null;
 let marketLoading = false;
 let marketLoadError: string | null = null;
-let marketExchangeBusy = false;
-let marketExchangeError: string | null = null;
+/** productId currently being consumed via "使用" — disables just that
+ * button, not the whole page, while the usePotion call is in flight. */
+let potionUseBusyId: string | null = null;
+let potionUseError: string | null = null;
 /** "confirm" gates a purchase (shown once, before the very first buy);
  * "review" is opened any time via the market page's "查看條款" link and has
  * no side effect on close. */
@@ -239,6 +260,20 @@ let purchaseFlow: PurchaseFlow = { kind: "idle" };
  * meantime. */
 function purchaseFlowKind(): PurchaseFlow["kind"] {
   return purchaseFlow.kind;
+}
+
+async function loadCampaigns() {
+  campaignsLoading = true;
+  campaignsLoadError = null;
+  render();
+  try {
+    campaigns = await fetchActiveCampaigns();
+  } catch (err) {
+    campaignsLoadError = t("activitiesLoadError");
+    console.warn("活動清單載入失敗", err);
+  }
+  campaignsLoading = false;
+  render();
 }
 
 async function loadMarketProducts() {
@@ -371,25 +406,27 @@ async function handleRecheckOrder(orderId: string) {
   render();
 }
 
-async function handleExchangeAll() {
-  const total = state.wallet.paidCoinBalance;
-  if (total <= 0 || marketExchangeBusy) return;
-  marketExchangeBusy = true;
-  marketExchangeError = null;
+/** Drinks one owned potion — buying and using are separate actions, so a
+ * player can stockpile potions and use them whenever they actually need the
+ * stamina, not just the moment they buy one. */
+async function handleUsePotion(productId: string) {
+  if (potionUseBusyId) return;
+  potionUseBusyId = productId;
+  potionUseError = null;
   render();
   try {
-    const result = await exchangeCoinsForStamina(total);
-    state.wallet = result;
+    const result = await usePotion(productId);
+    state.wallet.potions = result.potions;
     // Purchased stamina is meant to let a paying player exceed the free
     // regen cap — unlike natural regen (settleStamina), this intentionally
     // does not clamp to MAX_STAMINA_UNITS.
-    state.staminaUnits += total;
+    state.staminaUnits += result.units;
     persist();
   } catch (err) {
-    marketExchangeError = t("marketExchangeFailed");
-    console.warn("兌換加班費失敗", err);
+    potionUseError = t("marketUseFailed");
+    console.warn("使用藥水失敗", err);
   }
-  marketExchangeBusy = false;
+  potionUseBusyId = null;
   render();
 }
 /** History entries are collapsed to just a title by default; expanding one
@@ -423,12 +460,29 @@ function formatDuration(units: number): string {
   return t("durationHoursMinutes", { h, m });
 }
 
-/** Compact "x時y分" form used for the header stamina readout. */
+/** Compact "x時y分" form used for the header stamina readout. `units` can be
+ * fractional (see displayStaminaUnits) — floored to whole minutes so the
+ * live-ticking display never shows a decimal minute. */
 function formatHoursMinutes(units: number): string {
-  const totalMinutes = units * UNIT_MINUTES;
+  const totalMinutes = Math.floor(units * UNIT_MINUTES);
   const h = Math.floor(totalMinutes / 60);
   const m = totalMinutes % 60;
   return t("compactHoursMinutes", { h, m });
+}
+
+/** Fractional stamina for DISPLAY only — smoothly creeps from
+ * state.staminaUnits toward +1 over the current regen cycle (REGEN_MINUTES_
+ * PER_UNIT real minutes) so the header bar/label visibly fills second by
+ * second instead of sitting frozen and then jumping a whole 10-game-minute
+ * unit at once. Never used for anything spendable — actual duration
+ * selection and spendStamina() only ever look at the real, whole-unit
+ * state.staminaUnits, so a player still can't act on a partial unit. */
+function displayStaminaUnits(): number {
+  if (state.staminaUnits >= MAX_STAMINA_UNITS) return MAX_STAMINA_UNITS;
+  const elapsedMs = Date.now() - state.staminaLastSettled;
+  const cycleMs = REGEN_MINUTES_PER_UNIT * 60_000;
+  const fraction = Math.min(1, Math.max(0, elapsedMs / cycleMs));
+  return state.staminaUnits + fraction;
 }
 
 /** mm:ss countdown display for the live stamina-regen ticker. */
@@ -503,14 +557,19 @@ function render() {
   }
 
   const content =
-    view === "history" ? renderHistoryContent() : view === "market" ? renderMarketContent() : renderPlayContent();
+    view === "history"
+      ? renderHistoryContent()
+      : view === "market"
+        ? renderMarketContent()
+        : view === "activities"
+          ? renderActivitiesContent()
+          : renderPlayContent();
 
   app.innerHTML = `
     <div class="wrap">
       <header class="app-header">
         <h1>${t("appTitle")}</h1>
         <div class="header-right">
-          ${renderHeaderCurrency()}
           ${renderHeaderStamina()}
           ${renderAccountMenu()}
         </div>
@@ -531,6 +590,7 @@ function render() {
   if (view === "play") attachPlayHandlers();
   if (view === "history") attachHistoryHandlers();
   if (view === "market") attachMarketHandlers();
+  if (view === "activities") attachActivitiesHandlers();
   if (nameModalOpen) attachNameModalHandlers();
   else if (announcementModalOpen) attachAnnouncementModalHandlers();
   if (resultModalOpen) attachResultModalHandlers();
@@ -540,26 +600,15 @@ function render() {
   }
 }
 
-/** Shown on every page (not just the market tab) — a paying player should
- * always be able to glance at their balance, not have to switch tabs to
- * check. Reads state.wallet directly rather than fetching anything, so it
- * works even before the market tab's product list has ever loaded. */
-function renderHeaderCurrency(): string {
-  return `
-    <div class="header-currency" title="${t("currencyLabel")}">
-      💰 <span class="header-currency-value">${state.wallet.paidCoinBalance}</span>
-    </div>
-  `;
-}
-
 function renderHeaderStamina(): string {
   const remaining = state.staminaUnits;
-  const pct = Math.round((remaining / MAX_STAMINA_UNITS) * 100);
+  const displayUnits = displayStaminaUnits();
+  const pct = Math.min(100, (displayUnits / MAX_STAMINA_UNITS) * 100);
   return `
     <div class="stamina-mini">
       <div class="stamina-mini-row">
         <span class="stamina-mini-label">${t("staminaLabel")}</span>
-        <span class="stamina-mini-value">${formatHoursMinutes(remaining)}</span>
+        <span class="stamina-mini-value">${formatHoursMinutes(displayUnits)}</span>
       </div>
       <div class="stamina-bar"><div class="stamina-fill" style="width:${pct}%"></div></div>
       ${
@@ -599,7 +648,9 @@ function renderAccountDropdown(loggedIn: boolean): string {
       <div class="account-dropdown-name-row">
         <span class="account-dropdown-name-label">${t("jobTitleLabel")}</span>
         <span class="account-dropdown-name-value">${escapeHtml(L(state.jobTitle))}</span>
+        <button id="job-title-hint-btn" class="account-name-edit-btn" title="${t("jobTitleHintTitle")}">${INFO_ICON}</button>
       </div>
+      ${jobTitleHintOpen ? `<p class="account-dropdown-info">${t("jobTitleHint")}</p>` : ""}
       <button id="language-toggle-btn" class="account-dropdown-btn">${t("languageToggle")}</button>
       ${
         loggedIn
@@ -715,6 +766,7 @@ function renderTabNav(): string {
   const tabs: { key: View; labelKey: Parameters<typeof translate>[0] }[] = [
     { key: "play", labelKey: "tabPlay" },
     { key: "history", labelKey: "tabHistory" },
+    { key: "activities", labelKey: "tabActivities" },
     { key: "market", labelKey: "tabMarket" },
   ];
   return `
@@ -740,6 +792,24 @@ const SORT_ALPHA_ICON =
 const SORT_CLOCK_ICON =
   '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.5V10l3 2"/></svg>';
 
+/** Plain single-colour exclamation mark (not the red ❗ emoji) for the
+ * job-title-hint toggle — inherits the button's text colour via
+ * currentColor instead of always rendering red/yellow regardless of theme. */
+const INFO_ICON =
+  '<svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><rect x="8.7" y="3" width="2.6" height="9" rx="1.3"/><rect x="8.7" y="14" width="2.6" height="2.6" rx="1.3"/></svg>';
+
+/** Simple potion-bottle outline for the shop — size is passed in per product
+ * so 大瓶/小瓶 reads visually as well as by name (see renderMarketCard). */
+function potionIcon(size: number): string {
+  return `<svg viewBox="0 0 20 20" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h4M8.5 3v3.2c0 .5-.2 1-.6 1.4L6.5 9c-.7.7-1 1.6-1 2.6V15a2 2 0 002 2h5a2 2 0 002-2v-3.4c0-1-.4-1.9-1-2.6l-1.4-1.4a2 2 0 01-.6-1.4V3"/></svg>`;
+}
+
+/** Resolve button's busy state — a plain spinning ring, no text. See
+ * .spinner-icon in style.css for the rotation keyframes; stroke-dasharray
+ * leaves a gap so the ring reads as spinning rather than a static circle. */
+const SPINNER_ICON =
+  '<svg class="spinner-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10" cy="10" r="7.5" stroke-dasharray="35 12"/></svg>';
+
 function renderPlayContent(): string {
   const remaining = state.staminaUnits;
   const cappedDuration = Math.min(durationUnits, Math.max(1, maxSelectableUnits()));
@@ -761,14 +831,13 @@ function renderPlayContent(): string {
     !(showingResult && lastResult!.event.comboKey === currentComboKey);
 
   let resolveLabel: string;
-  if (isResolving) resolveLabel = t("resolvingLabel");
-  else if (remaining <= 0) resolveLabel = t("staminaInsufficientLabel");
+  if (remaining <= 0) resolveLabel = t("staminaInsufficientLabel");
   else if (!hasSelection) resolveLabel = t("pleaseSelectLabel");
   else resolveLabel = t("startLabel");
 
   return `
     <section class="action-bar">
-      <div class="slot-group">
+      <div class="slot-group ${slotGroupModeClass()}">
         ${CATEGORY_ORDER.map((cat) => renderSlot(cat)).join("")}
       </div>
       <div class="time-bar">
@@ -779,7 +848,7 @@ function renderPlayContent(): string {
         </div>
         <button class="step-btn" id="dur-plus" ${durationUnits >= maxSelectableUnits() ? "disabled" : ""}>＋</button>
       </div>
-      <button id="resolve-btn" class="resolve-btn-compact" ${!canAct ? "disabled" : ""}>${resolveLabel}</button>
+      <button id="resolve-btn" class="resolve-btn-compact" ${!canAct ? "disabled" : ""}>${isResolving ? SPINNER_ICON : resolveLabel}</button>
     </section>
 
     ${isDuplicate ? `<p class="duplicate-hint">${t("duplicateHint")}</p>` : ""}
@@ -801,15 +870,37 @@ function renderPlayContent(): string {
   `;
 }
 
+function slotValueLabel(cat: Category): string {
+  const selectedId = selection[cat];
+  return selectedId ? optionLabel(selectedId) : t("unselected");
+}
+
 function renderSlot(cat: Category): string {
   const selectedId = selection[cat];
-  const valueLabel = selectedId ? optionLabel(selectedId) : t("unselected");
+  const valueLabel = slotValueLabel(cat);
   return `
     <button class="slot slot-border-${cat} ${cat === activeCategory ? "slot-active" : ""} ${selectedId ? "slot-filled" : ""}" data-slot-category="${cat}">
       <span class="slot-cat">${L(CATEGORY_LABEL[cat])}</span>
       <span class="slot-value">${escapeHtml(valueLabel)}</span>
     </button>
   `;
+}
+
+/** Picks the 人/事/地/物 grid's column count from the longest currently
+ * shown label — a fixed 4-equal-width grid only has room for short names;
+ * one long AI-invented material (or a longer UI-language string) drops to
+ * 2 columns, and a name near the invention prompt's own 10-character cap
+ * (functions/src/index.ts's buildPrompt) drops to 1, rather than letting
+ * flex-wrap spill an odd box onto its own line. Thresholds are tuned
+ * against real measurements at this component's typical rendered width
+ * (~300px): 5 characters is the last one that still fits 4-up, 6-8 fit
+ * comfortably 2-up, and 9+ (close to the 10-char generation ceiling) get
+ * the full row to themselves for a safety margin. */
+function slotGroupModeClass(): string {
+  const maxLen = Math.max(...CATEGORY_ORDER.map((cat) => slotValueLabel(cat).length));
+  if (maxLen >= 9) return "slot-group-1col";
+  if (maxLen >= 6) return "slot-group-2col";
+  return "";
 }
 
 function renderMaterialOptions(cat: Category | null): string {
@@ -1038,6 +1129,67 @@ function renderHistoryContent(): string {
   `;
 }
 
+function renderActivityEntry(c: Campaign): string {
+  const expanded = expandedCampaignIds.has(c.id);
+
+  if (!expanded) {
+    return `
+      <li class="collection-entry collection-entry-collapsed">
+        <button class="collection-entry-toggle" data-toggle-campaign="${escapeHtml(c.id)}">
+          <span class="collection-entry-title">${escapeHtml(L(c.title))}</span>
+          <span class="collection-entry-chevron">▾</span>
+        </button>
+      </li>
+    `;
+  }
+
+  const sections: [Parameters<typeof translate>[0], Localized][] = [
+    ["activityContentLabel", c.content],
+    ["activityGoalLabel", c.goal],
+    ["activityRulesLabel", c.rules],
+    ["activityRewardLabel", c.reward],
+  ];
+
+  return `
+    <li class="collection-entry collection-entry-expanded">
+      <button class="collection-entry-toggle" data-toggle-campaign="${escapeHtml(c.id)}">
+        <span class="collection-entry-title">${escapeHtml(L(c.title))}</span>
+        <span class="collection-entry-chevron">▴</span>
+      </button>
+      <div class="collection-entry-details">
+        ${sections
+          .map(
+            ([labelKey, value]) => `
+          <div class="activity-section">
+            <div class="activity-section-label">${t(labelKey)}</div>
+            <p class="activity-section-body">${escapeHtml(L(value))}</p>
+          </div>
+        `
+          )
+          .join("")}
+      </div>
+    </li>
+  `;
+}
+
+function renderActivitiesContent(): string {
+  if (campaignsLoading && campaigns === null) {
+    return `<section class="market-card-main"><p class="market-sub">${t("resolvingLabel")}</p></section>`;
+  }
+  if (campaignsLoadError) {
+    return `<section class="market-card-main"><p class="market-error">${escapeHtml(campaignsLoadError)}</p></section>`;
+  }
+  const list = campaigns ?? [];
+  if (list.length === 0) {
+    return `<section class="market-card-main"><p class="market-sub">${t("activitiesEmpty")}</p></section>`;
+  }
+  return `
+    <ol class="collection-list collection-list-full">
+      ${list.map((c) => renderActivityEntry(c)).join("")}
+    </ol>
+  `;
+}
+
 function renderMarketContent(): string {
   const googleLinked = !!currentUser && isGoogleLinked(currentUser);
   const modal = consentModalOpen ? renderConsentModal() : "";
@@ -1079,12 +1231,12 @@ function renderMarketGoogleGate(): string {
   `;
 }
 
-/** Single unified card: balance, buy, and exchange in one place — replaces
- * the old separate wallet card / notice paragraph / product grid, which was
- * three stacked boxes to say one thing now that there's only one product. */
+/** Single unified card: buy and use, per potion product. The overtime-pay
+ * balance/exchange step is intentionally not shown here — it's an internal
+ * bookkeeping figure for now (see topupService.ts's creditOrder), not
+ * something the player needs to see or act on until it comes back as a
+ * general rechargeable currency. */
 function renderMarketCard(): string {
-  const { paidCoinBalance } = state.wallet;
-
   if (marketLoading && !marketProducts) {
     return `<section class="market-card-main"><p class="market-sub">${t("resolvingLabel")}</p></section>`;
   }
@@ -1092,37 +1244,40 @@ function renderMarketCard(): string {
     return `<section class="market-card-main"><p class="market-error">${escapeHtml(marketLoadError)}</p></section>`;
   }
   const products = marketProducts ?? [];
+  const { potions } = state.wallet;
+  // Icon scales with how much stamina the potion is worth (relative to the
+  // biggest one in the current catalog) so "大瓶/小瓶" reads visually, not
+  // just from the name text — generic over however many products exist.
+  const maxUnits = Math.max(1, ...products.map((pr) => pr.paidCoins));
 
   return `
     <section class="market-card-main">
-      <div class="market-balance-row">
-        <span>${t("marketWalletPaid")}</span>
-        <strong>${paidCoinBalance}</strong>
-      </div>
-
+      ${potionUseError ? `<p class="market-error">${escapeHtml(potionUseError)}</p>` : ""}
       ${products
-        .map(
-          (p) => `
+        .map((p) => {
+          const owned = potions[p.id] ?? 0;
+          const busy = potionUseBusyId === p.id;
+          const iconSize = 12 + Math.round((p.paidCoins / maxUnits) * 8);
+          return `
         <div class="market-product-row">
-          <div class="market-product-info">
-            <div class="market-units">${escapeHtml(L(p.name))}</div>
-            <div class="market-price">NT$ ${p.price}</div>
-          </div>
-          <button class="market-buy-btn market-buy-btn-enabled" data-product-id="${escapeHtml(p.id)}">${t("marketBuyBtn")}</button>
+          <span class="market-product-name" title="${escapeHtml(L(p.description))}">
+            ${potionIcon(iconSize)}
+            <span class="market-units">${escapeHtml(L(p.name))}</span>
+          </span>
+          <span class="market-product-right">
+            <button
+              class="market-buy-btn market-use-btn ${owned > 0 ? "market-buy-btn-enabled" : ""}"
+              data-use-product-id="${escapeHtml(p.id)}"
+              ${owned <= 0 || busy ? "disabled" : ""}
+            >${busy ? t("marketProcessing") : t("marketUseBtn")}</button>
+            <span class="market-owned">${t("marketOwnedLabel", { n: owned })}</span>
+            <button class="market-buy-btn market-buy-btn-enabled" data-product-id="${escapeHtml(p.id)}">${t("marketBuyBtn")}</button>
+            <span class="market-price">NT$ ${p.price}</span>
+          </span>
         </div>
-      `
-        )
+      `;
+        })
         .join("")}
-
-      <div class="market-divider"></div>
-
-      ${marketExchangeError ? `<p class="market-error">${escapeHtml(marketExchangeError)}</p>` : ""}
-      <button
-        id="market-exchange-all-btn"
-        class="market-buy-btn ${paidCoinBalance > 0 ? "market-buy-btn-enabled" : ""}"
-        ${paidCoinBalance <= 0 || marketExchangeBusy ? "disabled" : ""}
-      >${marketExchangeBusy ? t("marketProcessing") : paidCoinBalance > 0 ? t("marketExchangeAllBtn") : t("marketExchangeNone")}</button>
-      <p class="market-sub">${t("marketExchangeNote")}</p>
     </section>
   `;
 }
@@ -1153,7 +1308,7 @@ function renderPurchaseFlow(): string {
     return `
       <section class="market-flow-card">
         <h2>${t("marketSuccessTitle")}</h2>
-        <p>${t("marketSuccessBody", { paid: paidCoins })}</p>
+        <p>${t("marketSuccessBody", { duration: formatDuration(paidCoins) })}</p>
         <button id="market-back-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketBackBtn")}</button>
       </section>
     `;
@@ -1200,6 +1355,20 @@ function attachTabNavHandlers() {
       if (view === "market" && marketProducts === null && !marketLoading) {
         loadMarketProducts();
       }
+      if (view === "activities" && campaigns === null && !campaignsLoading) {
+        loadCampaigns();
+      }
+    });
+  });
+}
+
+function attachActivitiesHandlers() {
+  app.querySelectorAll<HTMLButtonElement>("[data-toggle-campaign]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.toggleCampaign!;
+      if (expandedCampaignIds.has(id)) expandedCampaignIds.delete(id);
+      else expandedCampaignIds.add(id);
+      render();
     });
   });
 }
@@ -1208,10 +1377,6 @@ function attachMarketHandlers() {
   document
     .querySelector<HTMLButtonElement>("#market-google-signin-btn")
     ?.addEventListener("click", handleGoogleSignInClick);
-
-  document.querySelector<HTMLButtonElement>("#market-exchange-all-btn")?.addEventListener("click", () => {
-    handleExchangeAll();
-  });
 
   document.querySelector<HTMLButtonElement>("#view-terms-btn")?.addEventListener("click", handleViewTerms);
   document.querySelector<HTMLButtonElement>("#consent-confirm-btn")?.addEventListener("click", () => {
@@ -1228,6 +1393,13 @@ function attachMarketHandlers() {
     btn.addEventListener("click", () => {
       const product = marketProducts?.find((p) => p.id === btn.dataset.productId);
       if (product) handleBuy(product);
+    });
+  });
+
+  app.querySelectorAll<HTMLButtonElement>("[data-use-product-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const productId = btn.dataset.useProductId;
+      if (productId) handleUsePotion(productId);
     });
   });
 
@@ -1281,29 +1453,42 @@ function attachMarketHandlers() {
   }
 }
 
+/** Shared post-sign-in bookkeeping — runs whether the Google credential came
+ * back through the popup flow (resolves inline) or the redirect flow
+ * (resolves on the next page load, see completeGoogleRedirectSignIn). Never
+ * duplicate this logic at either call site. */
+async function finishGoogleSignIn(user: User) {
+  currentUser = user;
+  const localPlayerName = state.playerName;
+  const remote = await pullRemoteState(user.uid);
+  if (remote) {
+    state = remote;
+    // Don't let adopting a nameless remote profile erase a name the
+    // player had already set locally on this device.
+    if (!state.playerName && localPlayerName) state.playerName = localPlayerName;
+    syncNotice = t("noticeRestoredFromCloud");
+  } else {
+    syncNotice = t("noticeGoogleLinked");
+    persist();
+    notifyPlayerRegistered(state.playerName);
+  }
+}
+
 /** Shared by both the account dropdown's and the market page's Google
  * sign-in buttons — they must never have their own independent copies of
  * this logic (or, worse, share a DOM id and silently leave one of them
  * without a listener attached at all). */
 async function handleGoogleSignInClick() {
   if (currentUser && isGoogleLinked(currentUser)) return;
-  const localPlayerName = state.playerName;
   try {
     syncNotice = t("noticeOpeningGoogle");
     render();
     const user = await signInWithGoogle();
-    currentUser = user;
-    const remote = await pullRemoteState(user.uid);
-    if (remote) {
-      state = remote;
-      // Don't let adopting a nameless remote profile erase a name the
-      // player had already set locally on this device.
-      if (!state.playerName && localPlayerName) state.playerName = localPlayerName;
-      syncNotice = t("noticeRestoredFromCloud");
-    } else {
-      syncNotice = t("noticeGoogleLinked");
-      persist();
-    }
+    // null means signInWithGoogle redirected instead of popping up (mobile/
+    // embedded browsers) — the page is navigating away right now, so there's
+    // nothing further to do; completeGoogleRedirectSignIn picks up the
+    // result on the next load.
+    if (user) await finishGoogleSignIn(user);
   } catch (err) {
     console.warn("Google 登入失敗", err);
     syncNotice = t("noticeGoogleSignInFailed");
@@ -1328,6 +1513,11 @@ function attachAccountMenuHandlers() {
     nameInputDraft = state.playerName;
     nameModalCanCancel = true;
     nameModalOpen = true;
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>("#job-title-hint-btn")?.addEventListener("click", () => {
+    jobTitleHintOpen = !jobTitleHintOpen;
     render();
   });
 
@@ -1609,26 +1799,50 @@ window.addEventListener("resize", () => {
   if (tutorialStep !== null) positionTutorialOverlay();
 });
 
-ensureSignedIn()
-  .then(async (user) => {
+async function startNormalSignIn() {
+  try {
+    const user = await ensureSignedIn();
     currentUser = user;
     if (isGoogleLinked(user)) {
       const remote = await pullRemoteState(user.uid);
       if (remote) state = remote;
     }
-    render();
-  })
-  .catch((err) => {
+  } catch (err) {
     console.warn("登入失敗,將只使用本機模式", err);
+  }
+  render();
+}
+
+// On mobile/embedded browsers, signInWithGoogle() redirects instead of
+// popping up (see firebase.ts) — check for that result FIRST, before the
+// normal ensureSignedIn flow, since a completed redirect already carries
+// everything finishGoogleSignIn needs (and running both would just double
+// -fetch the remote profile for no benefit).
+completeGoogleRedirectSignIn()
+  .then(async (redirectUser) => {
+    if (redirectUser) {
+      await finishGoogleSignIn(redirectUser);
+      render();
+      return;
+    }
+    await startNormalSignIn();
+  })
+  .catch(async (err) => {
+    console.warn("Google 登入(重新導向)失敗", err);
+    syncNotice = t("noticeGoogleSignInFailed");
+    await startNormalSignIn();
   });
 
-// Ticks every second so the "MM:SS 後 +1" countdown actually counts down live.
-// A full render() every second would rebuild the whole page mid-drag if the
-// player happens to be dragging the duration slider at that moment (same
-// class of issue as the slider's own input/change split above) — so the
-// common case just patches the countdown text directly. A full render() (plus
-// persist()) only happens on the rarer occasion a stamina unit actually
-// regenerates, since that changes the bar/percentage/resolve-button state too.
+// Ticks every second so the header stamina bar/label fill in smoothly
+// (see displayStaminaUnits) and the "MM:SS 後 +1" countdown counts down
+// live. A full render() every second would rebuild the whole page mid-drag
+// if the player happens to be dragging the duration slider at that moment
+// (same class of issue as the slider's own input/change split above) — so
+// the common case just patches these three elements' text/style directly.
+// A full render() (plus persist()) only happens on the rarer occasion a
+// whole stamina unit actually regenerates, since that's also the only time
+// the resolve button / max-selectable-duration actually changes — the
+// live-ticking display never grants anything spendable on its own.
 setInterval(() => {
   const before = state.staminaUnits;
   settleStamina(state);
@@ -1637,6 +1851,11 @@ setInterval(() => {
     render();
     return;
   }
+  const displayUnits = displayStaminaUnits();
+  const fill = document.querySelector<HTMLElement>(".stamina-fill");
+  if (fill) fill.style.width = `${Math.min(100, (displayUnits / MAX_STAMINA_UNITS) * 100)}%`;
+  const valueLabel = document.querySelector<HTMLElement>(".stamina-mini-value");
+  if (valueLabel) valueLabel.textContent = formatHoursMinutes(displayUnits);
   const hint = document.querySelector<HTMLElement>(".stamina-mini-hint");
   if (hint && state.staminaUnits < MAX_STAMINA_UNITS) {
     hint.textContent = t("regenCountdown", { time: formatCountdown(secondsUntilNextUnit(state)) });

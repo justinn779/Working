@@ -97,3 +97,29 @@ export interface Announcement {
   dismissible: boolean;
   updatedAt: number;
 }
+
+/** A limited-time (or standing) event the admin publicises on the 活動 tab.
+ * Deliberately all free-text, not a structured/tracked goal system — what
+ * counts as "the goal" or "the reward" varies completely from one campaign
+ * to the next (a material-collection challenge, a real-world giveaway, a
+ * seasonal theme...), so this is a content/CMS record, not something the
+ * game verifies or auto-grants. Any actual reward fulfillment happens
+ * out-of-band (e.g. admin manually adjusts a winner's balance) — this just
+ * publishes what the campaign is and what winning it looks like. Lives in
+ * Firestore's `campaigns` collection, publicly readable, only
+ * admin-writable (see firestore.rules), same trust model as Announcement. */
+export interface Campaign {
+  id: string;
+  title: Localized;
+  /** 活動內容 — what the campaign actually is. */
+  content: Localized;
+  /** 活動目標 — what a player needs to do, described in plain language. */
+  goal: Localized;
+  /** 活動說明 — rules/details/fine print. */
+  rules: Localized;
+  /** 活動獎勵 — what winning gets you. */
+  reward: Localized;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}

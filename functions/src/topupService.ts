@@ -1,4 +1,5 @@
 import { getFirestore } from "firebase-admin/firestore";
+import { notifyTelegram } from "./telegram";
 import { canTransition, LedgerEntry, OrderStatus, TopupOrder, TopupProduct } from "./topupTypes";
 
 const db = getFirestore();
@@ -125,7 +126,14 @@ async function markCaptured(
  * PayPal capture can never be credited twice, no matter how many times this
  * function is called for it (double-click, webhook redelivery, webhook and
  * frontend capture racing each other, retry after a timeout, ...). */
-async function creditOrder(orderId: string, captureId: string): Promise<TopupOrder> {
+/** `wasNewlyCredited` distinguishes an actual first-time credit from an
+ * idempotent no-op re-hit (frontend polling + webhook redelivery both call
+ * this for the same capture) — captureAndCredit uses it to notify exactly
+ * once per real payment instead of once per call. */
+async function creditOrder(
+  orderId: string,
+  captureId: string
+): Promise<{ order: TopupOrder; wasNewlyCredited: boolean }> {
   const orderRef = db.collection("orders").doc(orderId);
   const captureRef = db.collection("paypalCaptures").doc(captureId);
 
@@ -134,7 +142,7 @@ async function creditOrder(orderId: string, captureId: string): Promise<TopupOrd
     if (!orderSnap.exists) throw new TopupError("訂單不存在");
     const order = orderSnap.data() as TopupOrder;
 
-    if (order.status === "CREDITED") return order; // idempotent no-op
+    if (order.status === "CREDITED") return { order, wasNewlyCredited: false };
     if (order.status !== "CAPTURED") {
       throw new TopupError(`訂單狀態 ${order.status} 無法入帳(必須先是 CAPTURED)`);
     }
@@ -144,7 +152,7 @@ async function creditOrder(orderId: string, captureId: string): Promise<TopupOrd
       // This captureId was already claimed by a concurrent/earlier call.
       // The order itself just hasn't caught up yet in this read — safe to
       // treat as "someone else is handling it", not an error.
-      return order;
+      return { order, wasNewlyCredited: false };
     }
 
     const walletRef = db.collection("players").doc(order.userId);
@@ -152,6 +160,11 @@ async function creditOrder(orderId: string, captureId: string): Promise<TopupOrd
     const wallet = walletSnap.exists ? walletSnap.data()! : {};
     const paidBefore = (wallet.paidCoinBalance as number) ?? 0;
     const paidAfter = paidBefore + order.paidCoins;
+    // Potions are tracked per-productId so a player can stockpile different
+    // kinds and use each independently later — separate from paidCoinBalance,
+    // which stays purely a bookkeeping figure for refund/clawback math.
+    const potionsBefore = (wallet.potions as Record<string, number>) ?? {};
+    const potionsAfter = { ...potionsBefore, [order.productId]: (potionsBefore[order.productId] ?? 0) + 1 };
 
     const now = Date.now();
     // create() (not set()) — a concurrent second attempt for the same
@@ -172,7 +185,7 @@ async function creditOrder(orderId: string, captureId: string): Promise<TopupOrd
     };
     tx.create(ledgerCol.doc(), entry);
 
-    tx.set(walletRef, { paidCoinBalance: paidAfter }, { merge: true });
+    tx.set(walletRef, { paidCoinBalance: paidAfter, potions: potionsAfter }, { merge: true });
     tx.update(orderRef, {
       status: "CREDITED" as OrderStatus,
       paypalCaptureId: captureId,
@@ -180,7 +193,10 @@ async function creditOrder(orderId: string, captureId: string): Promise<TopupOrd
       updatedAt: now,
     });
 
-    return { ...order, status: "CREDITED", paypalCaptureId: captureId, creditedAt: now, updatedAt: now };
+    return {
+      order: { ...order, status: "CREDITED", paypalCaptureId: captureId, creditedAt: now, updatedAt: now },
+      wasNewlyCredited: true,
+    };
   });
 }
 
@@ -223,6 +239,37 @@ export async function spendCoins(
   });
 }
 
+/** Consumes one owned potion of the given product and reports how many
+ * stamina units it's worth — the product's `paidCoins` field doubles as its
+ * stamina-unit amount (1 paidCoin = 1 unit, same rate spendCoins uses), so no
+ * separate "units granted" field is needed on the product doc. The actual
+ * staminaUnits mutation happens client-side after this resolves, same as
+ * spendCoins/exchangeCoinsForStamina — only the inventory count is
+ * server-authoritative. */
+export async function consumePotion(
+  userId: string,
+  productId: string
+): Promise<{ potions: Record<string, number>; units: number }> {
+  await assertNotUnderPaymentReview(userId);
+  const productSnap = await db.collection("products").doc(productId).get();
+  if (!productSnap.exists) throw new TopupError("找不到指定商品");
+  const product = productSnap.data() as TopupProduct;
+  const units = product.paidCoins;
+
+  const walletRef = db.collection("players").doc(userId);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(walletRef);
+    const wallet = snap.exists ? snap.data()! : {};
+    const potionsBefore = (wallet.potions as Record<string, number>) ?? {};
+    const countBefore = potionsBefore[productId] ?? 0;
+    if (countBefore <= 0) throw new TopupError("藥水數量不足");
+
+    const potionsAfter = { ...potionsBefore, [productId]: countBefore - 1 };
+    tx.set(walletRef, { potions: potionsAfter }, { merge: true });
+    return { potions: potionsAfter, units };
+  });
+}
+
 /** Explicitly fails an order for a reason discovered *before* markCaptured's
  * own amount/currency check would ever run — e.g. PayPal's capture came back
  * with a status other than COMPLETED, or its custom_id didn't match the
@@ -257,5 +304,11 @@ export async function captureAndCredit(
     // markCaptured routed it to FAILED (amount/currency mismatch) — do not credit.
     return captured;
   }
-  return creditOrder(orderId, captureId);
+  const { order, wasNewlyCredited } = await creditOrder(orderId, captureId);
+  if (wasNewlyCredited) {
+    await notifyTelegram(
+      `💰 儲值入帳\n訂單:${orderId}\n玩家:${order.userId}\n金額:${order.currency} ${order.amount}\n加班費:+${order.paidCoins}`
+    );
+  }
+  return order;
 }

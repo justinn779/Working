@@ -21,6 +21,10 @@ export interface TopupProduct {
   id: string;
   productCode: string;
   name: Localized;
+  /** Shown as a hover/tap tooltip on the product name — spells out the
+   * concrete effect (e.g. "補 8 小時工時") since the name itself is now just
+   * a size label (大瓶/小瓶) and doesn't say how much stamina it grants. */
+  description: Localized;
   currency: string;
   price: number;
   paidCoins: number;
@@ -57,6 +61,10 @@ const exchangeCoinsForStaminaCallable = httpsCallable<{ units: number }, { paidC
   functions,
   "exchangeCoinsForStamina"
 );
+const usePotionCallable = httpsCallable<{ productId: string }, { potions: Record<string, number>; units: number }>(
+  functions,
+  "usePotion"
+);
 
 export async function createTopupOrder(productId: string): Promise<TopupOrder> {
   const result = await createTopupOrderCallable({ productId });
@@ -75,5 +83,10 @@ export async function getOrderStatus(orderId: string): Promise<TopupOrder> {
 
 export async function exchangeCoinsForStamina(units: number): Promise<{ paidCoinBalance: number }> {
   const result = await exchangeCoinsForStaminaCallable({ units });
+  return result.data;
+}
+
+export async function usePotion(productId: string): Promise<{ potions: Record<string, number>; units: number }> {
+  const result = await usePotionCallable({ productId });
   return result.data;
 }

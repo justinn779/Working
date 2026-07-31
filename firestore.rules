@@ -28,16 +28,23 @@ service cloud.firestore {
     // Per-player progress: only the owning account (anonymous or
     // Google-linked, same uid either way) can read/write its own doc, plus
     // admin read for the dashboard's player lookup.
-    // NOTE: this still allows the client to write paidCoinBalance directly
-    // — that field is only ever *meant* to be written by Cloud Functions
-    // (Admin SDK bypasses rules entirely), but this rule doesn't itself
-    // stop a malicious client from writing it. Do not treat a wallet
-    // balance read here as trustworthy for anything security-sensitive;
-    // the ledger + order documents are the source of truth and are never
-    // client-writable (see below) — not even by an admin's own client.
+    // paidCoinBalance/potions are Cloud-Function-owned (spendCoins/
+    // consumePotion/creditOrder etc. trust these fields as authoritative —
+    // see topupService.ts) — a client write that changes either is
+    // rejected below, so the only way to move them is through Admin SDK
+    // (which bypasses rules entirely). Without this, a player could set
+    // their own potions/paidCoinBalance directly via the client SDK and
+    // redeem fabricated balance for free. The ledger + order documents
+    // remain the actual source of truth for auditing either way.
     match /players/{uid} {
       allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
-      allow write: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.get('paidCoinBalance', 0) == 0
+        && request.resource.data.get('potions', {}) == {};
+      allow update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.get('paidCoinBalance', 0) == resource.data.get('paidCoinBalance', 0)
+        && request.resource.data.get('potions', {}) == resource.data.get('potions', {});
+      allow delete: if request.auth != null && request.auth.uid == uid;
 
       // Append-only wallet ledger: the owning player or an admin may read;
       // only Cloud Functions (Admin SDK) may ever write an entry.
@@ -59,6 +66,14 @@ service cloud.firestore {
     // Modal announcement shown on load: public read (players see it before
     // any auth-gated action), admin-direct-write since it's just content.
     match /announcements/{announcementId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Activity/campaign listing (活動 tab): same trust model as
+    // announcements — public read, admin-direct-write, plain content with
+    // no money movement attached.
+    match /campaigns/{campaignId} {
       allow read: if true;
       allow write: if isAdmin();
     }

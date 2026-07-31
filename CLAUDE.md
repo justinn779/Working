@@ -1,4 +1,4 @@
-# Workplace Big & Small (職場大小事)
+# Working Big & Small (工作大小事)
 
 Firebase project: `workplace-big-small`. Vite + TS frontend (`src/`), Cloud Functions v2 backend (`functions/`), Firestore.
 

@@ -6,12 +6,17 @@ export type LanguageCode = "zh" | "en";
  * bilingual AI generation (see functions/src/index.ts) so a material's zh/en
  * names are always a matched pair, never independently translated. */
 const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
-  appTitle: { zh: "職場大小事", en: "Workplace Big & Small" },
+  appTitle: { zh: "工作大小事", en: "Working Big & Small" },
   staminaLabel: { zh: "工時", en: "Work Hours" },
   staminaFull: { zh: "工時全滿", en: "Work hours full" },
   regenCountdown: { zh: "{time} 後 +1", en: "+1 in {time}" },
   currencyLabel: { zh: "加班費", en: "OT Pay" },
   jobTitleLabel: { zh: "職稱", en: "Job Title" },
+  jobTitleHintTitle: { zh: "職稱是怎麼決定的?", en: "How does job title work?" },
+  jobTitleHint: {
+    zh: "職稱不是靠花更多時間或次數就能改變,而是當這次事件的內容本身像是升遷面談、決定離職創業、拿到新工作機會、或被開除這類轉折時,才有機會變動。可以從「主管」搭配「開會」或「辦公室」這類組合開始嘗試,看看故事怎麼發展。",
+    en: "Job title doesn't shift just from spending more time or grinding more events — it changes when an event's content itself reads like a turning point: a promotion talk, quitting to start your own thing, a new job offer, or getting let go. Try starting with combinations like Boss + Meeting or Boss + Office and see how the story unfolds.",
+  },
   jobTitleChangedTitle: { zh: "🎉 職稱異動", en: "🎉 Job Title Changed" },
   jobTitleChangedBody: { zh: "你現在是「{title}」了。", en: "You are now a {title}." },
 
@@ -61,9 +66,17 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
 
   tabPlay: { zh: "事件", en: "Events" },
   tabHistory: { zh: "歷史", en: "History" },
-  tabMarket: { zh: "市集", en: "Market" },
+  tabActivities: { zh: "活動", en: "Events" },
+  tabMarket: { zh: "商城", en: "Shop" },
 
-  resolvingLabel: { zh: "生成中…", en: "Generating…" },
+  activitiesLoadError: { zh: "活動清單載入失敗,請稍後再試", en: "Failed to load events — please try again later" },
+  activitiesEmpty: { zh: "目前沒有進行中的活動", en: "No events running right now" },
+  activityContentLabel: { zh: "活動內容", en: "What's Happening" },
+  activityGoalLabel: { zh: "活動目標", en: "Goal" },
+  activityRulesLabel: { zh: "活動說明", en: "Rules" },
+  activityRewardLabel: { zh: "活動獎勵", en: "Reward" },
+
+  resolvingLabel: { zh: "工作中…", en: "Working…" },
   staminaInsufficientLabel: { zh: "工時不足", en: "Not Enough Work Hours" },
   pleaseSelectLabel: { zh: "請選擇", en: "Please Select" },
   startLabel: { zh: "開始", en: "Start" },
@@ -127,6 +140,9 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   marketExchangeFailed: { zh: "兌換失敗,請稍後再試", en: "Exchange failed — please try again later" },
 
   marketBuyBtn: { zh: "購買", en: "Buy" },
+  marketOwnedLabel: { zh: "擁有 {n} 瓶", en: "{n} owned" },
+  marketUseBtn: { zh: "使用", en: "Use" },
+  marketUseFailed: { zh: "使用失敗,請稍後再試", en: "Failed to use — please try again later" },
   viewTermsLink: { zh: "查看服務條款與儲值規則", en: "View Terms & Top-up Rules" },
   consentModalTitle: { zh: "儲值前請詳閱", en: "Please Review Before Topping Up" },
   consentModalBody: {
@@ -137,7 +153,7 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   marketProcessing: { zh: "處理中,請稍候…", en: "Processing, please wait…" },
   marketCancelBtn: { zh: "取消", en: "Cancel" },
   marketSuccessTitle: { zh: "🎉 購買成功", en: "🎉 Purchase Successful" },
-  marketSuccessBody: { zh: "已加入 {paid} 點加班費。", en: "{paid} overtime pay added." },
+  marketSuccessBody: { zh: "已為你補充 {duration} 工時!", en: "Added {duration} of work hours!" },
   marketFailedTitle: { zh: "付款失敗", en: "Payment Failed" },
   marketRetryBtn: { zh: "重新購買", en: "Try Again" },
   marketCancelledTitle: { zh: "已取消", en: "Cancelled" },

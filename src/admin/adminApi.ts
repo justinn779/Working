@@ -3,17 +3,20 @@ import {
   collection,
   deleteDoc,
   doc,
+  documentId,
   getDoc,
   getDocs,
   limit,
   orderBy,
   query,
   QueryConstraint,
+  QueryDocumentSnapshot,
   setDoc,
+  startAfter,
   where,
 } from "firebase/firestore";
 import { db, functions } from "../firebase";
-import type { Announcement, Localized } from "../types";
+import type { Announcement, Campaign, Localized } from "../types";
 import type { OrderStatus, TopupOrder } from "../paypalTopup";
 
 // --- Types mirrored from functions/src/topupTypes.ts — this project
@@ -145,13 +148,22 @@ export async function fetchPlayerWallet(uid: string): Promise<PlayerWallet | nul
 /** 入職名稱 isn't unique and isn't the doc id (uid is), so this is a
  * "starts with" range query — the standard Firestore trick for prefix
  * search (no full-text/contains search without a third-party index). */
+/** Case-insensitive: matches against `playerNameLower` (see cloudSync.ts's
+ * toSyncedProfile), not `playerName` itself — Firestore range queries are
+ * byte-order comparisons with no case-folding, so a query against the
+ * original field would silently miss e.g. "ata" when the player's actual
+ * 入職名稱 is "ATA". Older player docs saved before playerNameLower existed
+ * won't match until that player's name is saved again (any state push
+ * rewrites it) — not retroactively backfilled since there's no reliable way
+ * to enumerate "every doc missing a field" without reading the whole
+ * collection anyway. */
 export async function searchPlayersByName(namePrefix: string): Promise<PlayerSearchResult[]> {
-  const prefix = namePrefix.trim();
+  const prefix = namePrefix.trim().toLowerCase();
   if (!prefix) return [];
   const q = query(
     collection(db, "players"),
-    where("playerName", ">=", prefix),
-    where("playerName", "<=", prefix + ""),
+    where("playerNameLower", ">=", prefix),
+    where("playerNameLower", "<=", prefix + ""),
     limit(RESULT_LIMIT)
   );
   const snap = await getDocs(q);
@@ -159,6 +171,36 @@ export async function searchPlayersByName(namePrefix: string): Promise<PlayerSea
     const data = d.data() as PlayerWallet;
     return { uid: d.id, playerName: data.playerName ?? "", paidCoinBalance: data.paidCoinBalance ?? 0 };
   });
+}
+
+const PLAYERS_PAGE_SIZE = 50;
+
+export interface PlayerListPage {
+  players: PlayerSearchResult[];
+  /** Pass back into fetchPlayersPage to get the next page; null once
+   * there's nothing more. */
+  lastDoc: QueryDocumentSnapshot | null;
+  hasMore: boolean;
+}
+
+/** Cursor-based paging (not offset-based — Firestore doesn't support an
+ * efficient "skip N"), ordered by document id, which every player doc has
+ * and needs no extra index for. Fetches one extra doc past the page size
+ * purely to answer "is there a next page" without a separate count query. */
+export async function fetchPlayersPage(afterDoc?: QueryDocumentSnapshot | null): Promise<PlayerListPage> {
+  const constraints: QueryConstraint[] = [orderBy(documentId()), limit(PLAYERS_PAGE_SIZE + 1)];
+  if (afterDoc) constraints.push(startAfter(afterDoc));
+  const snap = await getDocs(query(collection(db, "players"), ...constraints));
+  const hasMore = snap.docs.length > PLAYERS_PAGE_SIZE;
+  const pageDocs = snap.docs.slice(0, PLAYERS_PAGE_SIZE);
+  return {
+    players: pageDocs.map((d) => {
+      const data = d.data() as PlayerWallet;
+      return { uid: d.id, playerName: data.playerName ?? "", paidCoinBalance: data.paidCoinBalance ?? 0 };
+    }),
+    lastDoc: pageDocs.length > 0 ? pageDocs[pageDocs.length - 1] : null,
+    hasMore,
+  };
 }
 
 export async function fetchPlayerLedger(uid: string, range?: DateRange): Promise<LedgerEntry[]> {
@@ -196,6 +238,29 @@ export async function fetchAnnouncement(): Promise<Announcement | null> {
 export async function saveAnnouncement(a: Omit<Announcement, "id" | "updatedAt">): Promise<void> {
   const announcement: Announcement = { ...a, id: String(Date.now()), updatedAt: Date.now() };
   await setDoc(doc(db, "announcements", "current"), announcement);
+}
+
+/** Unlike announcements (a single `current` doc), campaigns are a real
+ * collection — multiple can exist (past/draft/live) at once — so the
+ * dashboard fetches everything, not just what's currently enabled (see
+ * src/campaigns.ts's fetchActiveCampaigns for the player-facing filtered
+ * version). */
+export async function fetchAllCampaigns(): Promise<Campaign[]> {
+  const snap = await getDocs(query(collection(db, "campaigns"), orderBy("createdAt", "desc")));
+  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Campaign, "id">) }));
+}
+
+/** `id: null` creates a new campaign with an auto-generated id (there's no
+ * natural human-chosen slug for a campaign the way "stamina-full" is for a
+ * product); passing an existing id updates that campaign in place. */
+export async function saveCampaign(id: string | null, data: Omit<Campaign, "id">): Promise<string> {
+  const ref = id ? doc(db, "campaigns", id) : doc(collection(db, "campaigns"));
+  await setDoc(ref, data, { merge: true });
+  return ref.id;
+}
+
+export async function deleteCampaign(id: string): Promise<void> {
+  await deleteDoc(doc(db, "campaigns", id));
 }
 
 export async function fetchDisputes(range?: DateRange): Promise<Dispute[]> {

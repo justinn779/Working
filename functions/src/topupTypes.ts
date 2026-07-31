@@ -117,6 +117,7 @@ export interface AdminActionLog {
 export interface TopupProduct {
   productCode: string;
   name: { zh: string; en: string };
+  description: { zh: string; en: string };
   currency: "TWD";
   price: number;
   paidCoins: number;
