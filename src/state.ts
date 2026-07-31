@@ -189,23 +189,6 @@ export function settleStamina(state: GameState): GameState {
   return state;
 }
 
-export function minutesUntilNextUnit(state: GameState): number {
-  if (state.staminaUnits >= MAX_STAMINA_UNITS) return 0;
-  const elapsedMs = Date.now() - state.staminaLastSettled;
-  const elapsedMinutes = elapsedMs / 60_000;
-  const remaining = REGEN_MINUTES_PER_UNIT - (elapsedMinutes % REGEN_MINUTES_PER_UNIT);
-  return Math.max(0, remaining);
-}
-
-/** Same countdown as minutesUntilNextUnit, but in whole seconds — drives a
- * live ticking display instead of a static "about N minutes" estimate. */
-export function secondsUntilNextUnit(state: GameState): number {
-  if (state.staminaUnits >= MAX_STAMINA_UNITS) return 0;
-  const cycleSeconds = REGEN_MINUTES_PER_UNIT * 60;
-  const elapsedSeconds = (Date.now() - state.staminaLastSettled) / 1000;
-  const remaining = cycleSeconds - (elapsedSeconds % cycleSeconds);
-  return Math.max(0, Math.round(remaining));
-}
 
 export function spendStamina(state: GameState, units: number): boolean {
   if (units <= 0 || units > state.staminaUnits) return false;

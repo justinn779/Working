@@ -28,7 +28,6 @@ import {
   isUnlocked,
   loadState,
   saveState,
-  secondsUntilNextUnit,
   settleStamina,
   type GameState,
 } from "./state";
@@ -460,14 +459,15 @@ function formatDuration(units: number): string {
   return t("durationHoursMinutes", { h, m });
 }
 
-/** Compact "x時y分" form used for the header stamina readout. `units` can be
- * fractional (see displayStaminaUnits) — floored to whole minutes so the
- * live-ticking display never shows a decimal minute. */
-function formatHoursMinutes(units: number): string {
-  const totalMinutes = Math.floor(units * UNIT_MINUTES);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  return t("compactHoursMinutes", { h, m });
+/** Compact "x時y分z秒" form used for the header stamina readout. `units` can
+ * be fractional (see displayStaminaUnits) — floored to whole seconds so it
+ * ticks up live, second by second, instead of jumping once a minute. */
+function formatHoursMinutesSeconds(units: number): string {
+  const totalSeconds = Math.floor(units * UNIT_MINUTES * 60);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return t("compactHoursMinutesSeconds", { h, m, s });
 }
 
 /** Fractional stamina for DISPLAY only — smoothly creeps from
@@ -483,13 +483,6 @@ function displayStaminaUnits(): number {
   const cycleMs = REGEN_MINUTES_PER_UNIT * 60_000;
   const fraction = Math.min(1, Math.max(0, elapsedMs / cycleMs));
   return state.staminaUnits + fraction;
-}
-
-/** mm:ss countdown display for the live stamina-regen ticker. */
-function formatCountdown(totalSeconds: number): string {
-  const m = Math.floor(totalSeconds / 60);
-  const s = totalSeconds % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 function formatTimestamp(ms: number): string {
@@ -601,21 +594,15 @@ function render() {
 }
 
 function renderHeaderStamina(): string {
-  const remaining = state.staminaUnits;
   const displayUnits = displayStaminaUnits();
   const pct = Math.min(100, (displayUnits / MAX_STAMINA_UNITS) * 100);
   return `
     <div class="stamina-mini">
       <div class="stamina-mini-row">
         <span class="stamina-mini-label">${t("staminaLabel")}</span>
-        <span class="stamina-mini-value">${formatHoursMinutes(displayUnits)}</span>
+        <span class="stamina-mini-value">${formatHoursMinutesSeconds(displayUnits)}</span>
       </div>
       <div class="stamina-bar"><div class="stamina-fill" style="width:${pct}%"></div></div>
-      ${
-        remaining < MAX_STAMINA_UNITS
-          ? `<p class="stamina-mini-hint">${t("regenCountdown", { time: formatCountdown(secondsUntilNextUnit(state)) })}</p>`
-          : `<p class="stamina-mini-hint">${t("staminaFull")}</p>`
-      }
     </div>
   `;
 }
@@ -1833,16 +1820,16 @@ completeGoogleRedirectSignIn()
     await startNormalSignIn();
   });
 
-// Ticks every second so the header stamina bar/label fill in smoothly
-// (see displayStaminaUnits) and the "MM:SS 後 +1" countdown counts down
-// live. A full render() every second would rebuild the whole page mid-drag
-// if the player happens to be dragging the duration slider at that moment
-// (same class of issue as the slider's own input/change split above) — so
-// the common case just patches these three elements' text/style directly.
-// A full render() (plus persist()) only happens on the rarer occasion a
-// whole stamina unit actually regenerates, since that's also the only time
-// the resolve button / max-selectable-duration actually changes — the
-// live-ticking display never grants anything spendable on its own.
+// Ticks every second so the header stamina bar/label count up live (see
+// displayStaminaUnits). A full render() every second would rebuild the
+// whole page mid-drag if the player happens to be dragging the duration
+// slider at that moment (same class of issue as the slider's own
+// input/change split above) — so the common case just patches these two
+// elements' text/style directly. A full render() (plus persist()) only
+// happens on the rarer occasion a whole stamina unit actually regenerates,
+// since that's also the only time the resolve button / max-selectable-
+// duration actually changes — the live-ticking display never grants
+// anything spendable on its own.
 setInterval(() => {
   const before = state.staminaUnits;
   settleStamina(state);
@@ -1855,9 +1842,5 @@ setInterval(() => {
   const fill = document.querySelector<HTMLElement>(".stamina-fill");
   if (fill) fill.style.width = `${Math.min(100, (displayUnits / MAX_STAMINA_UNITS) * 100)}%`;
   const valueLabel = document.querySelector<HTMLElement>(".stamina-mini-value");
-  if (valueLabel) valueLabel.textContent = formatHoursMinutes(displayUnits);
-  const hint = document.querySelector<HTMLElement>(".stamina-mini-hint");
-  if (hint && state.staminaUnits < MAX_STAMINA_UNITS) {
-    hint.textContent = t("regenCountdown", { time: formatCountdown(secondsUntilNextUnit(state)) });
-  }
+  if (valueLabel) valueLabel.textContent = formatHoursMinutesSeconds(displayUnits);
 }, 1_000);

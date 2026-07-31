@@ -129,13 +129,6 @@ body {
   color: var(--accent);
 }
 
-.stamina-mini-hint {
-  margin: 4px 0 0;
-  font-size: 0.68rem;
-  color: var(--text-dim);
-  text-align: right;
-}
-
 .tab-nav {
   display: flex;
   gap: 6px;

@@ -8,8 +8,6 @@ export type LanguageCode = "zh" | "en";
 const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   appTitle: { zh: "工作大小事", en: "Working Big & Small" },
   staminaLabel: { zh: "工時", en: "Work Hours" },
-  staminaFull: { zh: "工時全滿", en: "Work hours full" },
-  regenCountdown: { zh: "{time} 後 +1", en: "+1 in {time}" },
   currencyLabel: { zh: "加班費", en: "OT Pay" },
   jobTitleLabel: { zh: "職稱", en: "Job Title" },
   jobTitleHintTitle: { zh: "職稱是怎麼決定的?", en: "How does job title work?" },
@@ -56,8 +54,8 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
     en: "Press Start — the system generates a workplace event and unlocks a new material along the way.",
   },
   tutorialStep4: {
-    zh: "工時代表你還能花的時間,用完後會隨時間慢慢恢復,倒數顯示在這裡。",
-    en: "Work hours represent how much time you can still spend. They slowly regenerate over time — the countdown shows here.",
+    zh: "工時代表你還能花的時間,用完後會隨時間慢慢恢復,這裡會即時顯示目前累積的工時。",
+    en: "Work hours represent how much time you can still spend. They slowly regenerate over time — this shows the current total live.",
   },
   tutorialStep5: {
     zh: "「歷史」頁收藏你發現過的所有事件,去收集更多獨特組合吧!",
@@ -197,7 +195,7 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   durationHoursMinutes: { zh: "{h} 小時 {m} 分鐘", en: "{h}h {m}m" },
   durationMinutesOnly: { zh: "{m} 分鐘", en: "{m}m" },
   durationHoursOnly: { zh: "{h} 小時", en: "{h}h" },
-  compactHoursMinutes: { zh: "{h}時{m}分", en: "{h}h{m}m" },
+  compactHoursMinutesSeconds: { zh: "{h}時{m}分{s}秒", en: "{h}h{m}m{s}s" },
 };
 
 /** Simple `{placeholder}` substitution — enough for this app's short strings,
