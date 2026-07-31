@@ -228,6 +228,7 @@ export function recordEvent(state: GameState, event: GameEvent): { isNewDiscover
       discovererName: event.discovererName,
       discoveredAt: event.discoveredAt,
       comboKey: event.comboKey,
+      durationUnits: event.durationUnits,
     };
   }
   return { isNewDiscovery };

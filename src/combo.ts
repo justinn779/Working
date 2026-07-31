@@ -49,13 +49,15 @@ export interface MaterialRecord {
   category: Category;
   label: Localized;
   description?: Localized;
-  /** Who/when/via-which-combo this material was first ever discovered
-   * (globally) — mirrors the discovering event's own discovererName/
-   * discoveredAt/comboKey, since a material is always invented alongside
-   * the one event that first produced it (see functions/src/index.ts). */
+  /** Who/when/via-which-combo/how-much-stamina this material was first ever
+   * discovered (globally) — mirrors the discovering event's own
+   * discovererName/discoveredAt/comboKey/durationUnits, since a material is
+   * always invented alongside the one event that first produced it (see
+   * functions/src/index.ts). */
   discovererName?: string;
   discoveredAt?: number;
   comboKey?: string;
+  durationUnits?: number;
 }
 
 export type KnownMaterials = Record<string, MaterialRecord>;

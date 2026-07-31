@@ -124,9 +124,12 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
 
   historySubTabEvents: { zh: "事件", en: "Events" },
   historySubTabMaterials: { zh: "要素", en: "Materials" },
-  materialHowLabel: { zh: "🔍 怎麼發現的", en: "🔍 How it was discovered" },
   materialSeedTag: { zh: "🎒 起始要素,一開始就擁有", en: "🎒 Starting material — you begin with this" },
   materialNoDescription: { zh: "(尚無說明)", en: "(No description yet)" },
+  materialDiscovererLine: {
+    zh: "發現人:{name} · {time} · 花費 {duration}",
+    en: "Discovered by: {name} · {time} · spent {duration}",
+  },
 
   unitsSuffix: { zh: "{n} 單位", en: "{n} Units" },
   notAvailable: { zh: "尚未開放", en: "Not Available Yet" },

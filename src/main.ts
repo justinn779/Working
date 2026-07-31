@@ -447,9 +447,17 @@ const historyFilters: Record<Category, string | null> = {
  * this transient play-page UI state. */
 type HistorySubTab = "events" | "materials";
 let historySubTab: HistorySubTab = "events";
-/** Same collapsed-by-default/expand-to-see-detail pattern as
- * expandedHistoryKeys, but for material entries in the 要素 sub-tab. */
-const expandedMaterialIds = new Set<string>();
+/** Which material is picked in each category's dropdown on the 要素
+ * sub-tab — a `<select>` per category rather than a long scrollable list,
+ * since a player who's unlocked many materials in one category otherwise
+ * has to scroll past all of them to reach the next category. null = nothing
+ * picked yet for that category (no detail card shown). */
+const materialsHistorySelection: Record<Category, string | null> = {
+  person: null,
+  matter: null,
+  place: null,
+  object: null,
+};
 
 function persist() {
   saveState(state);
@@ -1126,26 +1134,14 @@ function renderHistoryEventsContent(): string {
   `;
 }
 
-/** Single 要素 entry — collapsed shows just the label; expanded shows its
- * description plus who/when/how it was discovered (see combo.ts's
- * MaterialRecord). Starting materials (SEED_OPTIONS) have no discovery
- * record at all — they're tagged as starting equipment instead. */
-function renderMaterialEntry(id: string): string {
+/** Detail card for whichever material is currently picked in a category's
+ * dropdown — description plus who/when/how-much-stamina/how it was
+ * discovered (see combo.ts's MaterialRecord). Starting materials
+ * (SEED_OPTIONS) have no discovery record at all — tagged as starting
+ * equipment instead. */
+function renderMaterialDetail(id: string): string {
   const option = getOptionById(id, state.knownMaterials);
   if (!option) return "";
-  const isExpanded = expandedMaterialIds.has(id);
-
-  if (!isExpanded) {
-    return `
-      <li class="collection-entry collection-entry-collapsed">
-        <button class="collection-entry-toggle" data-material-key="${id}">
-          <span class="collection-entry-title">${escapeHtml(L(option.label))}</span>
-          <span class="collection-entry-chevron">▾</span>
-        </button>
-      </li>
-    `;
-  }
-
   const known = state.knownMaterials[id];
   const description = option.description?.zh ? escapeHtml(L(option.description)) : t("materialNoDescription");
   const discoveryTags = known?.comboKey
@@ -1158,24 +1154,21 @@ function renderMaterialEntry(id: string): string {
     : [];
 
   return `
-    <li class="collection-entry collection-entry-expanded">
-      <button class="collection-entry-toggle" data-material-key="${id}">
-        <span class="collection-entry-title">${escapeHtml(L(option.label))}</span>
-        <span class="collection-entry-chevron">▴</span>
-      </button>
-      <div class="collection-entry-details">
-        <p class="collection-desc">${description}</p>
-        ${
-          known?.discovererName && known.discoveredAt != null
-            ? `
-          <p class="material-how-label">${t("materialHowLabel")}</p>
-          <div class="tag-row">${discoveryTags.join("") || `<span class="tag tag-empty">${t("noMaterialsTag")}</span>`}</div>
-          <p class="collection-discoverer">${t("discovererLine", { name: known.discovererName, time: formatTimestamp(known.discoveredAt) })}</p>
-        `
-            : `<p class="collection-discoverer">${t("materialSeedTag")}</p>`
-        }
-      </div>
-    </li>
+    <div class="material-detail-card">
+      <p class="collection-desc">${description}</p>
+      ${
+        known?.discovererName && known.discoveredAt != null
+          ? `
+        <div class="tag-row">${discoveryTags.join("") || `<span class="tag tag-empty">${t("noMaterialsTag")}</span>`}</div>
+        <p class="collection-discoverer">${t("materialDiscovererLine", {
+          name: known.discovererName,
+          time: formatTimestamp(known.discoveredAt),
+          duration: formatDuration(known.durationUnits ?? 0),
+        })}</p>
+      `
+          : `<p class="collection-discoverer">${t("materialSeedTag")}</p>`
+      }
+    </div>
   `;
 }
 
@@ -1192,12 +1185,20 @@ function renderHistoryMaterialsContent(): string {
               locale
             )
           );
+        const selectedId = materialsHistorySelection[cat];
         return `
           <section class="material-history-group">
             <h3 class="material-history-group-title">${L(CATEGORY_LABEL[cat])}</h3>
-            <ol class="collection-list">
-              ${ids.map((id) => renderMaterialEntry(id)).join("")}
-            </ol>
+            <select class="material-history-select" data-material-category="${cat}">
+              <option value="">${t("pleaseSelectLabel")}</option>
+              ${ids
+                .map(
+                  (id) =>
+                    `<option value="${id}" ${selectedId === id ? "selected" : ""}>${escapeHtml(L(getOptionById(id, state.knownMaterials)!.label))}</option>`
+                )
+                .join("")}
+            </select>
+            ${selectedId ? renderMaterialDetail(selectedId) : ""}
           </section>
         `;
       }).join("")}
@@ -1740,11 +1741,10 @@ function attachHistoryHandlers() {
   });
 
   if (historySubTab === "materials") {
-    app.querySelectorAll<HTMLButtonElement>("[data-material-key]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const id = btn.dataset.materialKey!;
-        if (expandedMaterialIds.has(id)) expandedMaterialIds.delete(id);
-        else expandedMaterialIds.add(id);
+    app.querySelectorAll<HTMLSelectElement>(".material-history-select").forEach((select) => {
+      select.addEventListener("change", () => {
+        const cat = select.dataset.materialCategory as Category;
+        materialsHistorySelection[cat] = select.value || null;
         render();
       });
     });
