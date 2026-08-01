@@ -11,6 +11,7 @@ functions/lib/
 .firebase/
 firebase-debug.log
 firebase-debug.*.log
+firestore-debug.log
 ui-debug.log
 
 # Editor/OS
@@ -22,3 +23,6 @@ ui-debug.log
 
 # Per-machine function config (non-secret values, but env files vary per deploy target)
 functions/.env
+
+# Local secret values for the Functions emulator (firebase-functions/params defineSecret)
+functions/.secret.local
