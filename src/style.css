@@ -801,12 +801,6 @@ section {
   text-decoration: underline;
 }
 
-.paypal-button-container {
-  width: 100%;
-  max-width: 300px;
-  min-height: 45px;
-}
-
 .market-google-gate,
 .market-flow-card {
   background: var(--card);

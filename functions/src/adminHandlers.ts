@@ -1,13 +1,13 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getFirestore } from "firebase-admin/firestore";
-import { PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET } from "./paypalClient";
+import { ECPAY_HASH_IV, ECPAY_HASH_KEY, ECPAY_MERCHANT_ID } from "./ecpayClient";
 import { refundOrder } from "./refundService";
 import { notifyTelegram, TELEGRAM_SECRETS } from "./telegram";
 import { getOrder, TopupError } from "./topupService";
 import { AdminActionLog, LedgerEntry } from "./topupTypes";
 
 const db = getFirestore();
-const PAYPAL_SECRETS = [PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET];
+const ECPAY_SECRETS = [ECPAY_MERCHANT_ID, ECPAY_HASH_KEY, ECPAY_HASH_IV];
 
 /**
  * There is deliberately no admin web UI (Stage 1 design decision: core
@@ -56,7 +56,7 @@ interface AdminRefundOrderData {
 }
 
 export const adminRefundOrder = onCall(
-  { region: "asia-east1", maxInstances: 3, secrets: [...PAYPAL_SECRETS, ...TELEGRAM_SECRETS] },
+  { region: "asia-east1", maxInstances: 3, secrets: [...ECPAY_SECRETS, ...TELEGRAM_SECRETS] },
   async (request) => {
     const operatorUid = await assertAdmin(request.auth?.uid);
     const data = request.data as AdminRefundOrderData;

@@ -8,8 +8,8 @@ import { notifyTelegram, TELEGRAM_SECRETS } from "./telegram";
 initializeApp();
 const db = getFirestore();
 
-export { createTopupOrder, captureTopupOrder, getOrderStatus, exchangeCoinsForStamina, usePotion } from "./topupHandlers";
-export { paypalWebhook } from "./paypalWebhook";
+export { createTopupOrder, getOrderStatus, exchangeCoinsForStamina, usePotion } from "./topupHandlers";
+export { ecpayCallback } from "./ecpayCallback";
 export { adminRefundOrder, adminAdjustCoins, adminSetPaymentReview, adminReconcile } from "./adminHandlers";
 export { notifyPlayerRegistered } from "./playerHandlers";
 

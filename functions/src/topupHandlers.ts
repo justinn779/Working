@@ -1,25 +1,27 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import { capturePaypalOrder, createPaypalOrder, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET } from "./paypalClient";
-import { TELEGRAM_SECRETS } from "./telegram";
-import {
-  attachPaypalOrder,
-  captureAndCredit,
-  consumePotion,
-  createOrder,
-  getOrder,
-  markOrderFailed,
-  spendCoins,
-  TopupError,
-} from "./topupService";
+import { buildCheckoutFields, ECPAY_HASH_IV, ECPAY_HASH_KEY, ECPAY_MERCHANT_ID } from "./ecpayClient";
+import { consumePotion, createOrder, getOrder, markEcpayCreated, spendCoins, TopupError } from "./topupService";
 
-const PAYPAL_SECRETS = [PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET];
+const ECPAY_SECRETS = [ECPAY_MERCHANT_ID, ECPAY_HASH_KEY, ECPAY_HASH_IV];
+
+/** Deployed Cloud Function / Hosting URLs for this project — ECPay has no
+ * dashboard-configured webhook URL the way PayPal does; ReturnURL and
+ * ClientBackURL are plain fields passed on every single checkout request,
+ * so they're hardcoded here rather than looked up anywhere. */
+const ECPAY_RETURN_URL = "https://asia-east1-workplace-big-small.cloudfunctions.net/ecpayCallback";
+const CLIENT_BACK_URL_BASE = "https://workplace-big-small.web.app/";
 
 interface CreateTopupOrderData {
   productId: string;
 }
 
+/** Unlike PayPal's createTopupOrder (which called out to PayPal and got an
+ * id back to render buttons against), this needs no network call at all —
+ * ECPay's MerchantTradeNo is our own orderId, so the checkout form's fields
+ * can be computed purely locally. Returns the form the frontend must POST
+ * to actually send the buyer to ECPay's hosted checkout page. */
 export const createTopupOrder = onCall(
-  { region: "asia-east1", maxInstances: 5, secrets: PAYPAL_SECRETS },
+  { region: "asia-east1", maxInstances: 5, secrets: ECPAY_SECRETS },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "請先登入才能建立訂單");
     const data = request.data as CreateTopupOrderData;
@@ -27,12 +29,15 @@ export const createTopupOrder = onCall(
 
     try {
       const order = await createOrder(request.auth.uid, data.productId);
-      const { paypalOrderId } = await createPaypalOrder({
-        internalOrderId: order.orderId,
+      const { actionUrl, fields } = buildCheckoutFields({
+        merchantTradeNo: order.orderId,
         amount: order.amount,
-        currency: order.currency,
+        itemName: order.productName.zh,
+        returnUrl: ECPAY_RETURN_URL,
+        clientBackUrl: `${CLIENT_BACK_URL_BASE}?ecpayReturn=${order.orderId}`,
       });
-      return await attachPaypalOrder(order.orderId, paypalOrderId);
+      await markEcpayCreated(order.orderId);
+      return { orderId: order.orderId, actionUrl, fields };
     } catch (err) {
       if (err instanceof TopupError) throw new HttpsError("failed-precondition", err.message);
       throw err;
@@ -40,49 +45,12 @@ export const createTopupOrder = onCall(
   }
 );
 
-interface CaptureTopupOrderData {
-  orderId: string;
-}
-
-export const captureTopupOrder = onCall(
-  { region: "asia-east1", maxInstances: 5, secrets: [...PAYPAL_SECRETS, ...TELEGRAM_SECRETS] },
-  async (request) => {
-    if (!request.auth) throw new HttpsError("unauthenticated", "請先登入才能確認付款");
-    const data = request.data as CaptureTopupOrderData;
-    if (!data?.orderId) throw new HttpsError("invalid-argument", "缺少 orderId");
-
-    const order = await getOrder(data.orderId);
-    if (!order) throw new HttpsError("not-found", "找不到指定訂單");
-    if (order.userId !== request.auth.uid) throw new HttpsError("permission-denied", "無法存取他人的訂單");
-    // Already finished (double-click / retry) — never call PayPal's Capture
-    // API again for an order we already know is done; PayPal itself rejects
-    // a second capture attempt on an already-captured order, so short-circuit
-    // here instead of trying and having to interpret that error.
-    if (order.status === "CREDITED") return order;
-    if (!order.paypalOrderId) throw new HttpsError("failed-precondition", "訂單尚未建立 PayPal 付款");
-
-    try {
-      const captured = await capturePaypalOrder(order.paypalOrderId);
-      if (captured.customId !== order.orderId) {
-        console.warn("custom_id 不符", { orderId: order.orderId, capturedCustomId: captured.customId });
-        return await markOrderFailed(order.orderId, "PayPal 回傳的 custom_id 與訂單不符");
-      }
-      if (captured.status !== "COMPLETED") {
-        return await markOrderFailed(order.orderId, `PayPal 請款狀態為 ${captured.status}`);
-      }
-      return await captureAndCredit(order.orderId, captured.captureId, captured.amount, captured.currency);
-    } catch (err) {
-      // Could be a genuine failure, or PayPal rejecting a second concurrent
-      // capture attempt (e.g. the webhook got there first) — check whether
-      // the order actually finished in the meantime before giving up.
-      const latest = await getOrder(order.orderId);
-      if (latest?.status === "CREDITED") return latest;
-      console.warn("PayPal capture 失敗", err);
-      if (err instanceof TopupError) throw new HttpsError("failed-precondition", err.message);
-      throw new HttpsError("unavailable", "確認付款時發生問題,請稍後查詢訂單狀態");
-    }
-  }
-);
+// There is no ECPay equivalent of PayPal's client-triggered captureTopupOrder
+// — ECPay settles a credit-card AioCheckOut in one shot and reports the
+// result solely via the ReturnURL server notify (see ecpayCallback.ts),
+// which is the only path that ever calls captureAndCredit. The frontend
+// only gets to know the outcome by polling getOrderStatus below once the
+// buyer's browser comes back via ClientBackURL.
 
 interface GetOrderStatusData {
   orderId: string;

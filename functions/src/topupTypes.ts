@@ -1,12 +1,19 @@
-/** Shared enums/types for the PayPal top-up system. Mirrors (loosely) onto
+/** Shared enums/types for the ECPay top-up system. Mirrors (loosely) onto
  * src/types.ts on the frontend, but this file is the source of truth for
  * anything that only the backend needs to reason about (transitions,
  * ledger bookkeeping). */
 
+/** ECPay's flow has no equivalent of PayPal's separate buyer-approved/
+ * capture steps — a credit-card AioCheckOut settles in one shot, and the
+ * ReturnURL notify (see ecpayCallback.ts) is the *only* path to CREDITED,
+ * not a backup for a client-triggered capture. CAPTURED still exists as a
+ * brief internal checkpoint (amount/currency verified against the order
+ * snapshot) before crediting, same defensive split topupService.ts already
+ * used for PayPal, just reached from a single caller now instead of two
+ * racing ones. */
 export type OrderStatus =
   | "CREATED"
-  | "PAYPAL_CREATED"
-  | "APPROVED"
+  | "ECPAY_CREATED"
   | "CAPTURED"
   | "CREDITED"
   | "FAILED"
@@ -31,9 +38,8 @@ export type LedgerType =
  * from being credited again. `CREDITED` and the terminal refund/chargeback
  * states intentionally have no outgoing edges relevant to Stage 2. */
 export const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  CREATED: ["PAYPAL_CREATED", "CANCELLED"],
-  PAYPAL_CREATED: ["APPROVED", "CAPTURED", "FAILED", "CANCELLED"],
-  APPROVED: ["CAPTURED", "FAILED", "CANCELLED"],
+  CREATED: ["ECPAY_CREATED", "CANCELLED"],
+  ECPAY_CREATED: ["CAPTURED", "FAILED", "CANCELLED"],
   CAPTURED: ["CREDITED", "FAILED"],
   CREDITED: ["REFUND_PENDING", "DISPUTED"],
   FAILED: [],
@@ -68,28 +74,24 @@ export interface TopupOrder {
   currency: "TWD";
   amount: number;
   paidCoins: number;
-  paypalOrderId: string | null;
-  paypalCaptureId: string | null;
+  /** Always equal to `orderId` once set (see ecpayClient.ts's buildCheckoutFields
+   * doc comment) — kept as its own field, not derived, so "has the ECPay
+   * checkout form actually been generated yet" stays a plain null check,
+   * same shape as the old paypalOrderId. */
+  ecpayMerchantTradeNo: string | null;
+  /** ECPay's own transaction number for this trade, distinct from our
+   * MerchantTradeNo — only known once the ReturnURL notify arrives, and
+   * required to refund the charge later. */
+  ecpayTradeNo: string | null;
   status: OrderStatus;
   failureReason: string | null;
   createdAt: number;
-  approvedAt: number | null;
   capturedAt: number | null;
   creditedAt: number | null;
   refundedAt: number | null;
   updatedAt: number;
 }
 
-export interface Dispute {
-  paypalDisputeId: string;
-  orderId: string;
-  userId: string;
-  reason: string;
-  status: "OPEN" | "RESOLVED_BUYER_FAVOR" | "RESOLVED_SELLER_FAVOR" | "UNKNOWN";
-  createdAt: number;
-  updatedAt: number;
-  resolvedAt: number | null;
-}
 
 /** Lives on players/{uid}, not on an order — a review freeze applies to the
  * whole wallet (blocks new top-ups and spending) since coins are pooled and

@@ -5,8 +5,7 @@ import type { Localized } from "./types";
 
 export type OrderStatus =
   | "CREATED"
-  | "PAYPAL_CREATED"
-  | "APPROVED"
+  | "ECPAY_CREATED"
   | "CAPTURED"
   | "CREDITED"
   | "FAILED"
@@ -38,10 +37,19 @@ export interface TopupOrder {
   currency: string;
   amount: number;
   paidCoins: number;
-  paypalOrderId: string | null;
-  paypalCaptureId: string | null;
+  ecpayMerchantTradeNo: string | null;
+  ecpayTradeNo: string | null;
   status: OrderStatus;
   failureReason: string | null;
+}
+
+/** What createTopupOrder actually returns — an ECPay checkout form to POST
+ * the buyer to (see ecpayCheckout.ts), not a completed/orderable object the
+ * way PayPal's version returned a TopupOrder to mount buttons against. */
+export interface EcpayCheckout {
+  orderId: string;
+  actionUrl: string;
+  fields: Record<string, string>;
 }
 
 /** Products are read straight from Firestore (public-read per firestore.rules)
@@ -54,8 +62,7 @@ export async function listTopupProducts(): Promise<TopupProduct[]> {
   return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<TopupProduct, "id">) }));
 }
 
-const createTopupOrderCallable = httpsCallable<{ productId: string }, TopupOrder>(functions, "createTopupOrder");
-const captureTopupOrderCallable = httpsCallable<{ orderId: string }, TopupOrder>(functions, "captureTopupOrder");
+const createTopupOrderCallable = httpsCallable<{ productId: string }, EcpayCheckout>(functions, "createTopupOrder");
 const getOrderStatusCallable = httpsCallable<{ orderId: string }, TopupOrder>(functions, "getOrderStatus");
 const exchangeCoinsForStaminaCallable = httpsCallable<{ units: number }, { paidCoinBalance: number }>(
   functions,
@@ -66,13 +73,8 @@ const usePotionCallable = httpsCallable<{ productId: string }, { potions: Record
   "usePotion"
 );
 
-export async function createTopupOrder(productId: string): Promise<TopupOrder> {
+export async function createTopupOrder(productId: string): Promise<EcpayCheckout> {
   const result = await createTopupOrderCallable({ productId });
-  return result.data;
-}
-
-export async function captureTopupOrder(orderId: string): Promise<TopupOrder> {
-  const result = await captureTopupOrderCallable({ orderId });
   return result.data;
 }
 

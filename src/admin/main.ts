@@ -1259,7 +1259,7 @@ function renderDisputesTable(): string {
             .map(
               (d) => `
             <tr>
-              <td>${escapeHtml(d.paypalDisputeId)}</td>
+              <td>${escapeHtml(d.ecpayDisputeId)}</td>
               <td>${escapeHtml(d.orderId)}</td>
               <td>${escapeHtml(d.userId)}</td>
               <td>${escapeHtml(d.reason)}</td>

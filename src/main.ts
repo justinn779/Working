@@ -12,17 +12,16 @@ import {
   signInWithGoogle,
   signOutToLocal,
 } from "./firebase";
-import { t as translate } from "./i18n";
+import { redirectToEcpayCheckout } from "./ecpayCheckout";
 import {
-  captureTopupOrder,
   createTopupOrder,
   getOrderStatus,
   listTopupProducts,
   usePotion,
   type TopupOrder,
   type TopupProduct,
-} from "./paypalTopup";
-import { loadPaypalSdk, renderPaypalButtons } from "./paypalSdk";
+} from "./ecpayTopup";
+import { t as translate } from "./i18n";
 import {
   hasSavedState,
   isUnlocked,
@@ -216,7 +215,7 @@ let campaignsLoadError: string | null = null;
  * the history tab's expandedHistoryKeys. */
 const expandedCampaignIds = new Set<string>();
 
-// --- PayPal top-up (商城) state ---
+// --- ECPay top-up (商城) state ---
 let marketProducts: TopupProduct[] | null = null;
 let marketLoading = false;
 let marketLoadError: string | null = null;
@@ -237,29 +236,21 @@ const SUPPORT_EMAIL = "working.ata.lee@gmail.com";
 
 type PurchaseFlow =
   | { kind: "idle" }
-  /** `paypalOrderId` is null while createTopupOrder is still in flight, then
-   * set once we have a real PayPal order to mount Buttons against — see
-   * attachMarketHandlers, which only renders the Buttons once it's set. */
-  | { kind: "processing"; orderId: string | null; paypalOrderId: string | null }
+  /** Covers both "building the checkout form, about to redirect away" and
+   * "just came back from ECPay, querying what happened" — there's no
+   * PayPal-Buttons-style in-page widget to mount anymore, so unlike the old
+   * PayPal flow this never carries an id to render anything against. */
+  | { kind: "processing" }
   | { kind: "success"; order: TopupOrder }
   | { kind: "failed"; message: string }
-  | { kind: "cancelled" }
-  /** Our own capture call itself failed/timed out (network blip, function
-   * cold start, etc.) — independent of whether PayPal's side actually
-   * succeeded. Must never be shown as a failure: the webhook or a manual
-   * recheck is what resolves this, not telling the player to pay again. */
+  /** ECPay's ReturnURL notify (see ecpayCallback.ts) hasn't landed yet by
+   * the time the buyer's browser comes back via ClientBackURL — network
+   * blip, function cold start, or just plain lag. Must never be shown as a
+   * failure: the notify or a manual recheck is what resolves this, not
+   * telling the player to pay again. */
   | { kind: "pending"; orderId: string };
 
 let purchaseFlow: PurchaseFlow = { kind: "idle" };
-/** Indirection so a click-driven mutation of `purchaseFlow` mid-`await` in
- * handleBuy is actually observed — a direct `purchaseFlow.kind === "..."`
- * check right after an `await` gets over-narrowed by TS's control-flow
- * analysis to whatever was last assigned in that function, ignoring that a
- * button handler could have reassigned the module-level variable in the
- * meantime. */
-function purchaseFlowKind(): PurchaseFlow["kind"] {
-  return purchaseFlow.kind;
-}
 
 async function loadCampaigns() {
   campaignsLoading = true;
@@ -323,56 +314,23 @@ function handleConsentClose() {
   render();
 }
 
+/** Creates the internal order, then immediately hands the buyer's browser
+ * over to ECPay's hosted checkout page (see ecpayCheckout.ts) — unlike the
+ * old PayPal flow there's no id to mount an in-page widget against, so
+ * "processing" here just covers the brief moment before the page navigates
+ * away. Whatever happens next is discovered only once the buyer comes back
+ * via ClientBackURL (see checkEcpayReturn). */
 async function proceedToBuy(product: TopupProduct) {
-  purchaseFlow = { kind: "processing", orderId: null, paypalOrderId: null };
+  purchaseFlow = { kind: "processing" };
   render();
 
-  let order: TopupOrder;
   try {
-    order = await createTopupOrder(product.id);
+    const checkout = await createTopupOrder(product.id);
+    redirectToEcpayCheckout(checkout.actionUrl, checkout.fields);
   } catch (err) {
     purchaseFlow = { kind: "failed", message: (err as Error)?.message ?? String(err) };
     render();
-    return;
   }
-
-  // The buyer could have clicked "取消" while createTopupOrder's network
-  // call was still in flight — don't stomp that with a stale "processing".
-  if (purchaseFlowKind() === "cancelled") return;
-  if (!order.paypalOrderId) {
-    purchaseFlow = { kind: "failed", message: t("marketFailedTitle") };
-    render();
-    return;
-  }
-  // Mounting the actual PayPal Buttons for this paypalOrderId happens in
-  // attachMarketHandlers right after this render(), not here — rendering
-  // is main.ts's job, the SDK call belongs next to the DOM it targets.
-  purchaseFlow = { kind: "processing", orderId: order.orderId, paypalOrderId: order.paypalOrderId };
-  render();
-}
-
-/** Called once the buyer approves payment in the PayPal popup. This is the
- * ONLY place captureTopupOrder is invoked from the client — the webhook is
- * the other caller, and both funnel into the same backend idempotent
- * captureAndCredit, never a separate path. */
-async function handlePaypalApprove(orderId: string) {
-  purchaseFlow = { kind: "processing", orderId, paypalOrderId: null }; // hide the buttons while confirming
-  render();
-  try {
-    const captured = await captureTopupOrder(orderId);
-    if (captured.status === "CREDITED") {
-      purchaseFlow = { kind: "success", order: captured };
-      await refreshWalletFromServer();
-    } else if (captured.status === "FAILED") {
-      purchaseFlow = { kind: "failed", message: captured.failureReason ?? t("marketFailedTitle") };
-    } else {
-      purchaseFlow = { kind: "pending", orderId };
-    }
-  } catch (err) {
-    console.warn("確認付款失敗(訂單可能仍在處理中)", err);
-    purchaseFlow = { kind: "pending", orderId };
-  }
-  render();
 }
 
 async function refreshWalletFromServer() {
@@ -403,6 +361,29 @@ async function handleRecheckOrder(orderId: string) {
     console.warn("查詢訂單狀態失敗", err);
   }
   render();
+}
+
+/** ECPay's ClientBackURL (see functions/src/topupHandlers.ts's createTopupOrder)
+ * brings the buyer's browser back here with `?ecpayReturn=<orderId>` no
+ * matter how the checkout attempt actually went — success, failure, or the
+ * buyer just backing out on ECPay's own page. This is purely a UX nudge to
+ * open the market tab and show *something* immediately; the ReturnURL
+ * server notify (ecpayCallback.ts), not this redirect, is what actually
+ * decides the order's fate, so handleRecheckOrder's normal status query is
+ * reused as-is to find out what that was. Called once auth has resolved
+ * (see the completeGoogleRedirectSignIn chain below) since getOrderStatus
+ * needs a signed-in caller. */
+async function checkEcpayReturn() {
+  const params = new URLSearchParams(window.location.search);
+  const orderId = params.get("ecpayReturn");
+  if (!orderId) return;
+  // Strip the query param immediately so refreshing this page later doesn't
+  // re-trigger the same check against a possibly-stale order id.
+  window.history.replaceState({}, "", window.location.pathname);
+  view = "market";
+  purchaseFlow = { kind: "processing" };
+  render();
+  await handleRecheckOrder(orderId);
 }
 
 /** Drinks one owned potion — buying and using are separate actions, so a
@@ -1401,8 +1382,6 @@ function renderPurchaseFlow(): string {
     return `
       <section class="market-flow-card">
         <p>${t("marketProcessing")}</p>
-        ${purchaseFlow.paypalOrderId ? `<div id="paypal-button-container" class="paypal-button-container"></div>` : ""}
-        <button id="market-cancel-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketCancelBtn")}</button>
       </section>
     `;
   }
@@ -1422,14 +1401,6 @@ function renderPurchaseFlow(): string {
         <h2>${t("marketFailedTitle")}</h2>
         <p>${escapeHtml(purchaseFlow.message)}</p>
         <button id="market-back-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketRetryBtn")}</button>
-      </section>
-    `;
-  }
-  if (purchaseFlow.kind === "cancelled") {
-    return `
-      <section class="market-flow-card">
-        <h2>${t("marketCancelledTitle")}</h2>
-        <button id="market-back-btn" class="market-buy-btn market-buy-btn-enabled">${t("marketBackBtn")}</button>
       </section>
     `;
   }
@@ -1506,11 +1477,6 @@ function attachMarketHandlers() {
     });
   });
 
-  document.querySelector<HTMLButtonElement>("#market-cancel-btn")?.addEventListener("click", () => {
-    purchaseFlow = { kind: "cancelled" };
-    render();
-  });
-
   document.querySelector<HTMLButtonElement>("#market-back-btn")?.addEventListener("click", () => {
     purchaseFlow = { kind: "idle" };
     render();
@@ -1519,41 +1485,6 @@ function attachMarketHandlers() {
   document.querySelector<HTMLButtonElement>("#market-recheck-btn")?.addEventListener("click", () => {
     if (purchaseFlow.kind === "pending") handleRecheckOrder(purchaseFlow.orderId);
   });
-
-  // Mounting the actual PayPal Buttons: only once we have a real
-  // paypalOrderId from createTopupOrder, and the container div this render()
-  // just put in the DOM. A fresh render() always gives us a fresh container
-  // (the old one, with whatever the SDK mounted into it, was just discarded
-  // along with the rest of the previous innerHTML), so there's no stale
-  // double-mount to worry about here.
-  if (purchaseFlow.kind === "processing" && purchaseFlow.paypalOrderId) {
-    const orderId = purchaseFlow.orderId!;
-    const paypalOrderId = purchaseFlow.paypalOrderId;
-    loadPaypalSdk()
-      .then(() => {
-        // The flow could have moved on (cancelled, or approved+captured
-        // already) by the time the SDK script finishes loading.
-        if (purchaseFlowKind() !== "processing") return;
-        renderPaypalButtons("paypal-button-container", {
-          paypalOrderId,
-          onApprove: () => handlePaypalApprove(orderId),
-          onCancel: () => {
-            purchaseFlow = { kind: "cancelled" };
-            render();
-          },
-          onError: (err) => {
-            console.warn("PayPal Buttons 錯誤", err);
-            purchaseFlow = { kind: "failed", message: t("marketFailedTitle") };
-            render();
-          },
-        });
-      })
-      .catch((err) => {
-        console.warn("PayPal SDK 載入失敗", err);
-        purchaseFlow = { kind: "failed", message: t("marketFailedTitle") };
-        render();
-      });
-  }
 }
 
 /** Shared post-sign-in bookkeeping — runs whether the Google credential came
@@ -1963,7 +1894,8 @@ completeGoogleRedirectSignIn()
     console.warn("Google 登入(重新導向)失敗", err);
     syncNotice = t("noticeGoogleSignInFailed");
     await startNormalSignIn();
-  });
+  })
+  .then(() => checkEcpayReturn());
 
 // Ticks every second so the header stamina bar/label count up live (see
 // displayStaminaUnits). A full render() every second would rebuild the

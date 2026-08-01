@@ -32,7 +32,7 @@ export interface GameState {
   /** Whether the one-time gameplay tutorial has been shown — fires once,
    * right after the player sets their 入職名稱 for the very first time. */
   hasSeenTutorial: boolean;
-  /** Read-only mirror of the player's PayPal top-up wallet
+  /** Read-only mirror of the player's ECPay top-up wallet
    * (players/{uid}.paidCoinBalance/.potions in Firestore). Only Cloud
    * Functions ever change the real balance/inventory — this local copy
    * exists purely for display and is refreshed from cloudSync's

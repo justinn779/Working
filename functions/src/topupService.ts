@@ -37,12 +37,11 @@ export async function createOrder(userId: string, productId: string): Promise<To
     currency: product.currency,
     amount: product.price,
     paidCoins: product.paidCoins,
-    paypalOrderId: null,
-    paypalCaptureId: null,
+    ecpayMerchantTradeNo: null,
+    ecpayTradeNo: null,
     status: "CREATED",
     failureReason: null,
     createdAt: now,
-    approvedAt: null,
     capturedAt: null,
     creditedAt: null,
     refundedAt: null,
@@ -57,40 +56,41 @@ export async function getOrder(orderId: string): Promise<TopupOrder | null> {
   return snap.exists ? (snap.data() as TopupOrder) : null;
 }
 
-/** Records the PayPal order id returned by Create Order, and enforces that a
- * given paypalOrderId is only ever attached to one internal order — the
- * `paypalOrderIndex/{paypalOrderId}` doc's mere existence (written via
- * `create()`, which throws if it already exists) is Firestore's stand-in for
- * a relational unique index on a non-primary-key column. */
-export async function attachPaypalOrder(orderId: string, paypalOrderId: string): Promise<TopupOrder> {
+/** Marks the order as sent to ECPay's checkout — unlike PayPal's
+ * attachPaypalOrder, there's no externally-issued id to record or index:
+ * ECPay's MerchantTradeNo is our own orderId (see ecpayClient.ts), chosen
+ * before any network call, so it's already guaranteed unique by Firestore's
+ * own doc-id uniqueness. This step exists purely to move the state machine
+ * off CREATED once the buyer's actually been handed a checkout form. */
+export async function markEcpayCreated(orderId: string): Promise<TopupOrder> {
   const orderRef = db.collection("orders").doc(orderId);
-  const indexRef = db.collection("paypalOrderIndex").doc(paypalOrderId);
 
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(orderRef);
     if (!snap.exists) throw new TopupError("訂單不存在");
     const order = snap.data() as TopupOrder;
-    if (!canTransition(order.status, "PAYPAL_CREATED")) {
-      throw new TopupError(`訂單狀態 ${order.status} 無法轉移到 PAYPAL_CREATED`);
+    if (!canTransition(order.status, "ECPAY_CREATED")) {
+      throw new TopupError(`訂單狀態 ${order.status} 無法轉移到 ECPAY_CREATED`);
     }
 
     const now = Date.now();
-    tx.create(indexRef, { orderId, createdAt: now });
-    tx.update(orderRef, { paypalOrderId, status: "PAYPAL_CREATED" as OrderStatus, updatedAt: now });
-    return { ...order, paypalOrderId, status: "PAYPAL_CREATED", updatedAt: now };
+    tx.update(orderRef, {
+      ecpayMerchantTradeNo: orderId,
+      status: "ECPAY_CREATED" as OrderStatus,
+      updatedAt: now,
+    });
+    return { ...order, ecpayMerchantTradeNo: orderId, status: "ECPAY_CREATED", updatedAt: now };
   });
 }
 
-/** Marks an order CAPTURED once PayPal confirms the capture, after verifying
- * the captured amount/currency exactly match what was snapshotted at order
- * creation. A mismatch moves the order straight to FAILED instead — this is
- * where a tampered/replayed request gets caught, since nothing here trusts
+/** Marks an order CAPTURED once ECPay's ReturnURL notify confirms the
+ * charge, after verifying the notified amount exactly matches what was
+ * snapshotted at order creation (ECPay's TWD-only, so no currency check
+ * needed the way PayPal's multi-currency capture required). A mismatch
+ * moves the order straight to FAILED instead — this is where a
+ * tampered/replayed request gets caught, since nothing here trusts
  * anything the client sent except which internal orderId to look at. */
-async function markCaptured(
-  orderId: string,
-  capturedAmount: number,
-  capturedCurrency: string
-): Promise<TopupOrder> {
+async function markCaptured(orderId: string, capturedAmount: number): Promise<TopupOrder> {
   const orderRef = db.collection("orders").doc(orderId);
 
   return db.runTransaction(async (tx) => {
@@ -106,13 +106,13 @@ async function markCaptured(
     }
 
     const now = Date.now();
-    if (capturedAmount !== order.amount || capturedCurrency !== order.currency) {
+    if (capturedAmount !== order.amount) {
       tx.update(orderRef, {
         status: "FAILED" as OrderStatus,
-        failureReason: "PayPal 回傳金額或幣別與訂單快照不符",
+        failureReason: "ECPay 回傳金額與訂單快照不符",
         updatedAt: now,
       });
-      return { ...order, status: "FAILED", failureReason: "PayPal 回傳金額或幣別與訂單快照不符", updatedAt: now };
+      return { ...order, status: "FAILED", failureReason: "ECPay 回傳金額與訂單快照不符", updatedAt: now };
     }
 
     tx.update(orderRef, { status: "CAPTURED" as OrderStatus, capturedAt: now, updatedAt: now });
@@ -121,21 +121,20 @@ async function markCaptured(
 }
 
 /** The one and only place coins get added to a wallet. Guarded by
- * `paypalCaptures/{captureId}` the same way `attachPaypalOrder` is guarded by
- * `paypalOrderIndex` — its `create()`-only existence check means the same
- * PayPal capture can never be credited twice, no matter how many times this
- * function is called for it (double-click, webhook redelivery, webhook and
- * frontend capture racing each other, retry after a timeout, ...). */
+ * `ecpayCaptures/{ecpayTradeNo}` — its `create()`-only existence check means
+ * the same ECPay trade can never be credited twice, no matter how many
+ * times this function is called for it (ECPay redelivers a notify whose ack
+ * it didn't receive, double-processing the same request, ...). */
 /** `wasNewlyCredited` distinguishes an actual first-time credit from an
- * idempotent no-op re-hit (frontend polling + webhook redelivery both call
- * this for the same capture) — captureAndCredit uses it to notify exactly
- * once per real payment instead of once per call. */
+ * idempotent no-op re-hit (e.g. a redelivered ReturnURL notify for a trade
+ * already credited) — captureAndCredit uses it to notify exactly once per
+ * real payment instead of once per call. */
 async function creditOrder(
   orderId: string,
-  captureId: string
+  ecpayTradeNo: string
 ): Promise<{ order: TopupOrder; wasNewlyCredited: boolean }> {
   const orderRef = db.collection("orders").doc(orderId);
-  const captureRef = db.collection("paypalCaptures").doc(captureId);
+  const captureRef = db.collection("ecpayCaptures").doc(ecpayTradeNo);
 
   return db.runTransaction(async (tx) => {
     const orderSnap = await tx.get(orderRef);
@@ -149,7 +148,7 @@ async function creditOrder(
 
     const captureSnap = await tx.get(captureRef);
     if (captureSnap.exists) {
-      // This captureId was already claimed by a concurrent/earlier call.
+      // This ecpayTradeNo was already claimed by a concurrent/earlier call.
       // The order itself just hasn't caught up yet in this read — safe to
       // treat as "someone else is handling it", not an error.
       return { order, wasNewlyCredited: false };
@@ -168,14 +167,14 @@ async function creditOrder(
 
     const now = Date.now();
     // create() (not set()) — a concurrent second attempt for the same
-    // captureId aborts here with a conflict and the transaction retries,
+    // ecpayTradeNo aborts here with a conflict and the transaction retries,
     // re-reading captureSnap and taking the "already exists" branch above.
     tx.create(captureRef, { orderId, creditedAt: now });
 
     const ledgerCol = walletRef.collection("ledger");
     const entry: LedgerEntry = {
       orderId,
-      referenceId: captureId,
+      referenceId: ecpayTradeNo,
       transactionType: "PURCHASE_PAID",
       paidCoinDelta: order.paidCoins,
       paidBalanceAfter: paidAfter,
@@ -188,13 +187,13 @@ async function creditOrder(
     tx.set(walletRef, { paidCoinBalance: paidAfter, potions: potionsAfter }, { merge: true });
     tx.update(orderRef, {
       status: "CREDITED" as OrderStatus,
-      paypalCaptureId: captureId,
+      ecpayTradeNo,
       creditedAt: now,
       updatedAt: now,
     });
 
     return {
-      order: { ...order, status: "CREDITED", paypalCaptureId: captureId, creditedAt: now, updatedAt: now },
+      order: { ...order, status: "CREDITED", ecpayTradeNo, creditedAt: now, updatedAt: now },
       wasNewlyCredited: true,
     };
   });
@@ -271,9 +270,9 @@ export async function consumePotion(
 }
 
 /** Explicitly fails an order for a reason discovered *before* markCaptured's
- * own amount/currency check would ever run — e.g. PayPal's capture came back
- * with a status other than COMPLETED, or its custom_id didn't match the
- * order we asked about. Never touches CREDITED orders (idempotent no-op). */
+ * own amount check would ever run — e.g. ECPay's notify came back with
+ * RtnCode != 1, or its CheckMacValue didn't verify. Never touches CREDITED
+ * orders (idempotent no-op). */
 export async function markOrderFailed(orderId: string, reason: string): Promise<TopupOrder> {
   const orderRef = db.collection("orders").doc(orderId);
   return db.runTransaction(async (tx) => {
@@ -289,22 +288,16 @@ export async function markOrderFailed(orderId: string, reason: string): Promise<
   });
 }
 
-/** The single entry point both the frontend-triggered capture flow AND the
- * PayPal webhook flow must call — never call markCaptured/creditOrder
- * separately from two different code paths, or the two flows could
- * independently race past each other's guards. */
-export async function captureAndCredit(
-  orderId: string,
-  captureId: string,
-  capturedAmount: number,
-  capturedCurrency: string
-): Promise<TopupOrder> {
-  const captured = await markCaptured(orderId, capturedAmount, capturedCurrency);
+/** The single entry point ECPay's ReturnURL callback must call — never call
+ * markCaptured/creditOrder separately, or a redelivered notify racing
+ * itself could slip past one guard without the other. */
+export async function captureAndCredit(orderId: string, ecpayTradeNo: string, capturedAmount: number): Promise<TopupOrder> {
+  const captured = await markCaptured(orderId, capturedAmount);
   if (captured.status !== "CAPTURED" && captured.status !== "CREDITED") {
-    // markCaptured routed it to FAILED (amount/currency mismatch) — do not credit.
+    // markCaptured routed it to FAILED (amount mismatch) — do not credit.
     return captured;
   }
-  const { order, wasNewlyCredited } = await creditOrder(orderId, captureId);
+  const { order, wasNewlyCredited } = await creditOrder(orderId, ecpayTradeNo);
   if (wasNewlyCredited) {
     await notifyTelegram(
       `💰 儲值入帳\n訂單:${orderId}\n玩家:${order.userId}\n金額:${order.currency} ${order.amount}\n加班費:+${order.paidCoins}`

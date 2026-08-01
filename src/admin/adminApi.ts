@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 import { db, functions } from "../firebase";
 import type { Announcement, Campaign, Localized } from "../types";
-import type { OrderStatus, TopupOrder } from "../paypalTopup";
+import type { OrderStatus, TopupOrder } from "../ecpayTopup";
 
 // --- Types mirrored from functions/src/topupTypes.ts — this project
 // duplicates shared shapes between frontend/backend rather than sharing a
@@ -25,7 +25,7 @@ import type { OrderStatus, TopupOrder } from "../paypalTopup";
 // the admin dashboard is a second frontend consumer of the same backend
 // shapes, so it follows the same pattern. ---
 
-/** Fuller than src/paypalTopup.ts's player-facing TopupProduct — the admin
+/** Fuller than src/ecpayTopup.ts's player-facing TopupProduct — the admin
  * dashboard needs enabled/createdAt/updatedAt too, which players never do. */
 export interface AdminProduct {
   id: string;
@@ -39,7 +39,7 @@ export interface AdminProduct {
   updatedAt: number;
 }
 
-/** Fuller than src/paypalTopup.ts's player-facing TopupOrder — adds the
+/** Fuller than src/ecpayTopup.ts's player-facing TopupOrder — adds the
  * timestamp fields the dashboard displays but a player's own order view
  * doesn't need. */
 export interface AdminOrder extends TopupOrder {
@@ -62,7 +62,7 @@ export interface LedgerEntry {
 }
 
 export interface Dispute {
-  paypalDisputeId: string;
+  ecpayDisputeId: string;
   orderId: string;
   userId: string;
   reason: string;
@@ -322,7 +322,7 @@ export async function queryOrders(filter: { orderId?: string; userId?: string } 
 
 const adminRefundOrderCallable = httpsCallable<
   { orderId: string; reason: string; partialAmount?: number },
-  { order: AdminOrder; clawedBackPaid: number; shortfall: number; paypalRefundId: string }
+  { order: AdminOrder; clawedBackPaid: number; shortfall: number; ecpayRefundReference: string }
 >(functions, "adminRefundOrder");
 const adminAdjustCoinsCallable = httpsCallable<
   { userId: string; paidDelta: number; reason: string },

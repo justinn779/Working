@@ -158,12 +158,10 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   },
   consentAgreeBtn: { zh: "我同意並繼續", en: "I Agree, Continue" },
   marketProcessing: { zh: "處理中,請稍候…", en: "Processing, please wait…" },
-  marketCancelBtn: { zh: "取消", en: "Cancel" },
   marketSuccessTitle: { zh: "🎉 購買成功", en: "🎉 Purchase Successful" },
   marketSuccessBody: { zh: "已為你補充 {duration} 工時!", en: "Added {duration} of work hours!" },
   marketFailedTitle: { zh: "付款失敗", en: "Payment Failed" },
   marketRetryBtn: { zh: "重新購買", en: "Try Again" },
-  marketCancelledTitle: { zh: "已取消", en: "Cancelled" },
   marketBackBtn: { zh: "返回商店", en: "Back to Shop" },
   marketPendingTitle: { zh: "確認中", en: "Confirming" },
   marketPendingBody: {
