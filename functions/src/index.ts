@@ -12,6 +12,7 @@ export { createTopupOrder, captureTopupOrder, getOrderStatus, exchangeCoinsForSt
 export { paypalWebhook } from "./paypalWebhook";
 export { adminRefundOrder, adminAdjustCoins, adminSetPaymentReview, adminReconcile } from "./adminHandlers";
 export { notifyPlayerRegistered } from "./playerHandlers";
+export { claimFirstJobTitleAchievement } from "./achievementHandlers";
 
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const OPENAI_MODEL = "gpt-4o-mini";

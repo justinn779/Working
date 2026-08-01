@@ -24,7 +24,8 @@ export type LedgerType =
   | "CHARGEBACK"
   | "EXPIRED"
   | "ADMIN_ADJUSTMENT"
-  | "REVERSAL";
+  | "REVERSAL"
+  | "ACHIEVEMENT_REWARD";
 
 /** Legal order-status transitions. Any write that isn't listed here must be
  * rejected rather than applied — this is what stops e.g. a refunded order

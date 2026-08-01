@@ -17,6 +17,11 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   },
   jobTitleChangedTitle: { zh: "🎉 職稱異動", en: "🎉 Job Title Changed" },
   jobTitleChangedBody: { zh: "你現在是「{title}」了。", en: "You are now a {title}." },
+  achievementUnlockedTitle: { zh: "🏆 成就達成", en: "🏆 Achievement Unlocked" },
+  achievementFirstJobTitleChangeBody: {
+    zh: "首次職稱異動!獲得工時補充劑(大) x1,可到商城使用。",
+    en: "First job title change! You got 1x Work-Hours Supplement (Large) — use it from the Shop.",
+  },
 
   notSet: { zh: "未設定", en: "Not set" },
   editNameTitle: { zh: "編輯入職名稱", en: "Edit Display Name" },

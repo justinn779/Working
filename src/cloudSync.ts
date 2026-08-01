@@ -50,6 +50,7 @@ interface SyncedProfile {
 interface ServerOwnedWalletFields {
   paidCoinBalance?: number;
   potions?: Record<string, number>;
+  achievements?: Record<string, boolean>;
 }
 
 function toSyncedProfile(state: GameState): SyncedProfile {
@@ -115,6 +116,7 @@ export async function pullRemoteState(uid: string): Promise<GameState | null> {
     // the first-time tutorial to someone pulling down existing progress.
     hasSeenTutorial: true,
     wallet: { paidCoinBalance: profile.paidCoinBalance ?? 0, potions: profile.potions ?? {} },
+    achievements: profile.achievements ?? {},
     consentAcceptedAt: profile.consentAcceptedAt ?? null,
     dismissedAnnouncementId: profile.dismissedAnnouncementId ?? null,
     jobTitle: profile.jobTitle ?? DEFAULT_JOB_TITLE,

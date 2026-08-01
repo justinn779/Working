@@ -41,6 +41,14 @@ export interface GameState {
    * toSyncedProfile). `potions` is keyed by productId — how many of that
    * potion this player currently owns, unused/unspent. */
   wallet: { paidCoinBalance: number; potions: Record<string, number> };
+  /** Read-only mirror of players/{uid}.achievements — same "Cloud-Function-
+   * owned, refreshed via pullRemoteState, never pushed back" rule as
+   * `wallet` above. One-time reward flags keyed by achievement id (e.g.
+   * "firstJobTitleChange", see functions/src/achievementHandlers.ts) —
+   * used purely to avoid re-invoking the claim callable once already
+   * granted; the server-side flag is what actually prevents a duplicate
+   * grant. */
+  achievements: Record<string, boolean>;
   /** Epoch ms of when the player confirmed the top-up terms/consent modal —
    * null means never. Shown once (gates the first purchase), not required
    * again on every later purchase; the market page keeps a "查看條款" link
@@ -87,6 +95,7 @@ function freshState(): GameState {
     knownMaterials: {},
     hasSeenTutorial: false,
     wallet: { paidCoinBalance: 0, potions: {} },
+    achievements: {},
     consentAcceptedAt: null,
     dismissedAnnouncementId: null,
     jobTitle: DEFAULT_JOB_TITLE,
@@ -141,6 +150,12 @@ export function loadState(): GameState {
     // restored moments later for Google-linked players via pullRemoteState.
     if (typeof parsed.wallet.potions !== "object" || parsed.wallet.potions === null) {
       parsed.wallet.potions = {};
+    }
+    // Older saves predate achievements — default to none rather than
+    // wiping otherwise-valid progress. A real flag (if any) is restored
+    // moments later for Google-linked players via pullRemoteState.
+    if (typeof parsed.achievements !== "object" || parsed.achievements === null) {
+      parsed.achievements = {};
     }
     // Older saves predate the consent modal — default to "never accepted"
     // so returning players still see it once before their first purchase.

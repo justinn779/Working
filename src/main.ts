@@ -1,4 +1,5 @@
 import { fetchCurrentAnnouncement } from "./announcements";
+import { claimFirstJobTitleAchievement } from "./achievements";
 import { fetchActiveCampaigns } from "./campaigns";
 import { deleteRemoteState, notifyPlayerRegistered, pullRemoteState, pushRemoteState } from "./cloudSync";
 import { buildComboKey, decodeComboKey, getOptionById, hasAnySelection } from "./combo";
@@ -86,6 +87,10 @@ type View = "play" | "history" | "market" | "activities";
 let selection: Selection = emptySelection();
 let durationUnits = 1;
 let lastResult: ResolveResult | null = null;
+/** Set for the result modal currently shown by performResolve — true only
+ * when this exact resolve just freshly granted the first-job-title-change
+ * achievement (see claimFirstJobTitleAchievement), never on a repeat. */
+let achievementJustGranted = false;
 /** True once the player has touched selection/duration since lastResult was
  * set — governs whether the result card (and the duplicate-hint suppression
  * tied to it) still applies. Not driven by comboKey equality: after a resolve
@@ -955,6 +960,7 @@ function renderResultModal(): string {
         <p class="result-meta">🔎 ${t("discovererLine", { name: event.discovererName, time: formatTimestamp(event.discoveredAt) })}</p>
         ${renderFeaturedTag(event, isFeaturedOptionNewToMe)}
         ${jobTitleChanged ? `<div class="unlock-toast">${t("jobTitleChangedTitle")} — ${t("jobTitleChangedBody", { title: escapeHtml(L(jobTitleChanged)) })}</div>` : ""}
+        ${achievementJustGranted ? `<div class="unlock-toast">${t("achievementUnlockedTitle")} — ${t("achievementFirstJobTitleChangeBody")}</div>` : ""}
         <div class="modal-actions">
           <button id="result-modal-close-btn" class="modal-btn-primary">${t("closeBtn")}</button>
         </div>
@@ -1816,6 +1822,26 @@ async function performResolve(effectiveDuration: number) {
   // 素材選擇每次事件後自動回歸預設,時間長度則保留給下一次沿用。
   selection = emptySelection();
   resultStale = false;
+
+  achievementJustGranted = false;
+  // Local `achievements` check is just to skip an unnecessary network call
+  // on every later promotion — the server-side flag (see
+  // claimFirstJobTitleAchievement) is what actually prevents a duplicate
+  // grant, so it's safe to still call this even if the local mirror is
+  // stale/wrong.
+  if (outcome.result.jobTitleChanged && !state.achievements.firstJobTitleChange) {
+    try {
+      const claim = await claimFirstJobTitleAchievement();
+      state.wallet.potions = claim.potions;
+      if (claim.granted) {
+        state.achievements.firstJobTitleChange = true;
+        achievementJustGranted = true;
+      }
+    } catch (err) {
+      console.warn("領取首次職稱異動成就失敗", err);
+    }
+  }
+
   persist();
   render();
 }
