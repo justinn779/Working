@@ -693,7 +693,7 @@ function renderNameModal(): string {
 function renderJobTitleHintModal(): string {
   return `
     <div class="modal-backdrop">
-      <div class="modal-card">
+      <div class="modal-card modal-card-compact">
         <h2>${t("jobTitleHintTitle")}</h2>
         <p class="modal-hint">${t("jobTitleHint")}</p>
         <div class="modal-actions">

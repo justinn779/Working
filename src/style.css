@@ -1273,6 +1273,23 @@ section {
   line-height: 1.5;
 }
 
+/* Small popover style (matches .tutorial-tooltip's proportions) for a
+ * one-off info popup that isn't a multi-step form — e.g. the job title
+ * hint. Same .modal-card/.modal-backdrop shell, just noticeably smaller. */
+.modal-card-compact {
+  max-width: 260px;
+  padding: 16px;
+}
+
+.modal-card-compact h2 {
+  font-size: 0.95rem;
+}
+
+.modal-card-compact .modal-hint {
+  font-size: 0.8rem;
+  margin-bottom: 14px;
+}
+
 .modal-input {
   width: 100%;
   padding: 10px 12px;
