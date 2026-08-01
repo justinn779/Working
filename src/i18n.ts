@@ -10,10 +10,10 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   staminaLabel: { zh: "工時", en: "Work Hours" },
   currencyLabel: { zh: "加班費", en: "OT Pay" },
   jobTitleLabel: { zh: "職稱", en: "Job Title" },
-  jobTitleHintTitle: { zh: "職稱是怎麼決定的?", en: "How does job title work?" },
+  jobTitleHintTitle: { zh: "🚀 想升官?還是想跳槽?", en: "🚀 Ready for a promotion? Or a whole new career?" },
   jobTitleHint: {
-    zh: "職稱不是靠花更多時間或次數就能改變,而是當這次事件的內容本身像是升遷面談、決定離職創業、拿到新工作機會、或被開除這類轉折時,才有機會變動。可以從「主管」搭配「開會」或「辦公室」這類組合開始嘗試,看看故事怎麼發展。",
-    en: "Job title doesn't shift just from spending more time or grinding more events — it changes when an event's content itself reads like a turning point: a promotion talk, quitting to start your own thing, a new job offer, or getting let go. Try starting with combinations like Boss + Meeting or Boss + Office and see how the story unfolds.",
+    zh: "想甩掉「新進員工」這個稱號嗎?光靠花時間或衝次數是不會變的——真正的關鍵,是遇到像升遷面談、決定離職創業、拿到新工作機會、被開除這類職場轉捩點!試試看用「主管」搭配「開會」或「辦公室」開一局,說不定下一秒你就升官(或華麗轉身)了!",
+    en: "Ready to shake off \"New Employee\"? Grinding more time or more events won't do it — the real trigger is an event that feels like a genuine turning point: a promotion talk, quitting to start your own thing, a new job offer, or getting fired! Try pairing Boss with Meeting or Office and see if this is the one!",
   },
   jobTitleChangedTitle: { zh: "🎉 職稱異動", en: "🎉 Job Title Changed" },
   jobTitleChangedBody: { zh: "你現在是「{title}」了。", en: "You are now a {title}." },

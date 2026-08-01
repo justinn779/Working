@@ -596,6 +596,7 @@ function render() {
     ${tutorialStep !== null ? renderTutorialOverlay() : ""}
     ${resultModalOpen ? renderResultModal() : ""}
     ${longDurationConfirmOpen ? renderLongDurationConfirmModal() : ""}
+    ${jobTitleHintOpen ? renderJobTitleHintModal() : ""}
   `;
 
   attachTabNavHandlers();
@@ -607,6 +608,7 @@ function render() {
   if (nameModalOpen) attachNameModalHandlers();
   else if (announcementModalOpen) attachAnnouncementModalHandlers();
   if (resultModalOpen) attachResultModalHandlers();
+  if (jobTitleHintOpen) attachJobTitleHintModalHandlers();
   if (tutorialStep !== null) {
     attachTutorialHandlers();
     positionTutorialOverlay();
@@ -657,7 +659,6 @@ function renderAccountDropdown(loggedIn: boolean): string {
         <span class="account-dropdown-name-value">${escapeHtml(L(state.jobTitle))}</span>
         <button id="job-title-hint-btn" class="account-name-edit-btn" title="${t("jobTitleHintTitle")}">${INFO_ICON}</button>
       </div>
-      ${jobTitleHintOpen ? `<p class="account-dropdown-info">${t("jobTitleHint")}</p>` : ""}
       <button id="language-toggle-btn" class="account-dropdown-btn">${t("languageToggle")}</button>
       ${
         loggedIn
@@ -683,6 +684,20 @@ function renderNameModal(): string {
         <div class="modal-actions">
           ${nameModalCanCancel ? `<button id="name-cancel-btn" class="modal-btn-secondary">${t("cancel")}</button>` : ""}
           <button id="name-confirm-btn" class="modal-btn-primary">${t("confirm")}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderJobTitleHintModal(): string {
+  return `
+    <div class="modal-backdrop">
+      <div class="modal-card">
+        <h2>${t("jobTitleHintTitle")}</h2>
+        <p class="modal-hint">${t("jobTitleHint")}</p>
+        <div class="modal-actions">
+          <button id="job-title-hint-close-btn" class="modal-btn-primary">${t("closeBtn")}</button>
         </div>
       </div>
     </div>
@@ -1626,7 +1641,7 @@ function attachAccountMenuHandlers() {
   });
 
   document.querySelector<HTMLButtonElement>("#job-title-hint-btn")?.addEventListener("click", () => {
-    jobTitleHintOpen = !jobTitleHintOpen;
+    jobTitleHintOpen = true;
     render();
   });
 
@@ -1723,6 +1738,13 @@ function attachTutorialHandlers() {
 function attachResultModalHandlers() {
   document.querySelector<HTMLButtonElement>("#result-modal-close-btn")?.addEventListener("click", () => {
     resultModalOpen = false;
+    render();
+  });
+}
+
+function attachJobTitleHintModalHandlers() {
+  document.querySelector<HTMLButtonElement>("#job-title-hint-close-btn")?.addEventListener("click", () => {
+    jobTitleHintOpen = false;
     render();
   });
 }
