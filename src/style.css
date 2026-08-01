@@ -1273,21 +1273,53 @@ section {
   line-height: 1.5;
 }
 
-/* Small popover style (matches .tutorial-tooltip's proportions) for a
- * one-off info popup that isn't a multi-step form — e.g. the job title
- * hint. Same .modal-card/.modal-backdrop shell, just noticeably smaller. */
-.modal-card-compact {
-  max-width: 260px;
-  padding: 16px;
+/* Anchored info popover — same visual language as .tutorial-tooltip
+ * (fixed position, arrow, computed placement in positionJobTitleHintPopover)
+ * rather than a modal-backdrop dialog, since this is a quick aside about
+ * one specific button, not a flow that should block the rest of the page. */
+.hint-popover {
+  position: fixed;
+  width: min(260px, calc(100vw - 32px));
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  z-index: 50;
 }
 
-.modal-card-compact h2 {
-  font-size: 0.95rem;
+.hint-popover-arrow {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: 8px solid transparent;
 }
 
-.modal-card-compact .modal-hint {
+.hint-popover-title {
+  margin: 0 0 4px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.hint-popover-text {
+  margin: 0 0 12px;
   font-size: 0.8rem;
-  margin-bottom: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.hint-popover-close-btn {
+  display: block;
+  margin-left: auto;
+  padding: 6px 16px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
 }
 
 .modal-input {

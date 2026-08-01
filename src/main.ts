@@ -596,7 +596,6 @@ function render() {
     ${tutorialStep !== null ? renderTutorialOverlay() : ""}
     ${resultModalOpen ? renderResultModal() : ""}
     ${longDurationConfirmOpen ? renderLongDurationConfirmModal() : ""}
-    ${jobTitleHintOpen ? renderJobTitleHintModal() : ""}
   `;
 
   attachTabNavHandlers();
@@ -608,7 +607,10 @@ function render() {
   if (nameModalOpen) attachNameModalHandlers();
   else if (announcementModalOpen) attachAnnouncementModalHandlers();
   if (resultModalOpen) attachResultModalHandlers();
-  if (jobTitleHintOpen) attachJobTitleHintModalHandlers();
+  if (accountMenuOpen && jobTitleHintOpen) {
+    attachJobTitleHintPopoverHandlers();
+    positionJobTitleHintPopover();
+  }
   if (tutorialStep !== null) {
     attachTutorialHandlers();
     positionTutorialOverlay();
@@ -671,6 +673,7 @@ function renderAccountDropdown(loggedIn: boolean): string {
       <hr class="account-dropdown-divider" />
       <button id="delete-account-btn" class="account-dropdown-btn account-dropdown-btn-danger">${t("deleteAccount")}</button>
     </div>
+    ${jobTitleHintOpen ? renderJobTitleHintPopover() : ""}
   `;
 }
 
@@ -690,18 +693,53 @@ function renderNameModal(): string {
   `;
 }
 
-function renderJobTitleHintModal(): string {
+/** Anchored popover (arrow + position computed at runtime, same technique
+ * as the tutorial tour's tooltip — see positionJobTitleHintPopover) rather
+ * than a modal-backdrop dialog: this is a quick aside about one specific
+ * button, not a flow that needs to block the rest of the page. Embedded
+ * inside renderAccountDropdown's own output (not the top-level modal area)
+ * so it only ever exists while the dropdown itself does — no separate
+ * close-on-dropdown-close bookkeeping needed. */
+function renderJobTitleHintPopover(): string {
   return `
-    <div class="modal-backdrop">
-      <div class="modal-card modal-card-compact">
-        <h2>${t("jobTitleHintTitle")}</h2>
-        <p class="modal-hint">${t("jobTitleHint")}</p>
-        <div class="modal-actions">
-          <button id="job-title-hint-close-btn" class="modal-btn-primary">${t("closeBtn")}</button>
-        </div>
-      </div>
+    <div class="hint-popover">
+      <div class="hint-popover-arrow"></div>
+      <p class="hint-popover-title">${t("jobTitleHintTitle")}</p>
+      <p class="hint-popover-text">${escapeHtml(t("jobTitleHint"))}</p>
+      <button id="job-title-hint-close-btn" class="hint-popover-close-btn">${t("closeBtn")}</button>
     </div>
   `;
+}
+
+/** Measures #job-title-hint-btn and positions the popover (+ its arrow)
+ * around it — same math as positionTutorialOverlay, minus the highlight
+ * ring (there's no spotlighted target box here, just the one button). */
+function positionJobTitleHintPopover() {
+  const target = document.querySelector<HTMLElement>("#job-title-hint-btn");
+  const popover = document.querySelector<HTMLElement>(".hint-popover");
+  const arrow = document.querySelector<HTMLElement>(".hint-popover-arrow");
+  if (!target || !popover || !arrow) return;
+
+  const rect = target.getBoundingClientRect();
+  const popoverWidth = popover.offsetWidth;
+  const popoverHeight = popover.offsetHeight;
+  const gap = 10;
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+
+  const placeBelow = rect.bottom + gap + popoverHeight <= viewportH || rect.top < viewportH / 2;
+  const top = placeBelow ? rect.bottom + gap : rect.top - gap - popoverHeight;
+  const clampedTop = Math.max(8, Math.min(top, viewportH - popoverHeight - 8));
+
+  const centerX = rect.left + rect.width / 2;
+  const left = Math.max(8, Math.min(centerX - popoverWidth / 2, viewportW - popoverWidth - 8));
+
+  popover.style.top = `${clampedTop}px`;
+  popover.style.left = `${left}px`;
+
+  arrow.className = `hint-popover-arrow ${placeBelow ? "tutorial-arrow-up" : "tutorial-arrow-down"}`;
+  const arrowLeft = Math.max(12, Math.min(centerX - left, popoverWidth - 12));
+  arrow.style.left = `${arrowLeft}px`;
 }
 
 function renderLongDurationConfirmModal(): string {
@@ -1630,6 +1668,7 @@ function attachAccountMenuHandlers() {
   document.querySelector<HTMLButtonElement>("#account-menu-btn")?.addEventListener("click", (e) => {
     e.stopPropagation();
     accountMenuOpen = !accountMenuOpen;
+    if (!accountMenuOpen) jobTitleHintOpen = false;
     render();
   });
 
@@ -1674,6 +1713,7 @@ function attachAccountMenuHandlers() {
     resultStale = false;
     resultModalOpen = false;
     accountMenuOpen = false;
+    jobTitleHintOpen = false;
     persist();
     render();
   });
@@ -1742,7 +1782,7 @@ function attachResultModalHandlers() {
   });
 }
 
-function attachJobTitleHintModalHandlers() {
+function attachJobTitleHintPopoverHandlers() {
   document.querySelector<HTMLButtonElement>("#job-title-hint-close-btn")?.addEventListener("click", () => {
     jobTitleHintOpen = false;
     render();
@@ -1969,6 +2009,7 @@ document.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
   if (!target.closest(".account-menu")) {
     accountMenuOpen = false;
+    jobTitleHintOpen = false;
     render();
   }
 });
