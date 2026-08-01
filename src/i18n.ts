@@ -12,8 +12,8 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
   jobTitleLabel: { zh: "職稱", en: "Job Title" },
   jobTitleHintTitle: { zh: "🚀 想升官?還是想跳槽?", en: "🚀 Promotion? Or a new career?" },
   jobTitleHint: {
-    zh: "沒有固定公式,要看故事像不像真正的轉折。多試幾次,「主管」+「開會」是不錯的起點!",
-    en: "No fixed formula — it depends on whether the story itself feels like a real turning point. Keep trying; Boss + Meeting is a decent starting point!",
+    zh: "故事夠精彩、像真正的轉折時,職稱就有機會改變!",
+    en: "When a story feels like a real turning point, your title has a chance to change!",
   },
   jobTitleChangedTitle: { zh: "🎉 職稱異動", en: "🎉 Job Title Changed" },
   jobTitleChangedBody: { zh: "你現在是「{title}」了。", en: "You are now a {title}." },
