@@ -418,6 +418,42 @@ async function generateStory(
   throw new HttpsError("internal", "AI 沒有回覆有效內容,請再試一次");
 }
 
+/** Every resolveEvent call — cached or freshly generated — gets one entry
+ * here, unlike `state.collectedComboKeys` on the client (which dedupes by
+ * comboKey). This is a plain attempt log: replaying an already-seen combo
+ * still logs a new row, since that's a real thing the player did. Separately
+ * appends to jobTitleHistory when this specific call actually moved the
+ * player's title — mirrors the client's own condition in eventEngine.ts
+ * (`event.newJobTitle.zh !== state.jobTitle.zh`), which is always true
+ * whenever newJobTitle is non-null here: a cache hit's comboKey embeds the
+ * requesting jobTitle, so any cached newJobTitle was already validated (at
+ * generation time, see tryGenerate) to differ from that same starting title. */
+async function logPlayerAction(
+  uid: string,
+  entry: {
+    comboKey: string;
+    selection: Selection;
+    durationUnits: number;
+    jobTitleAtTime: Localized;
+    eventTitle: Localized;
+    source: "cached" | "generated";
+    newJobTitle: Localized | null;
+  }
+): Promise<void> {
+  const at = Date.now();
+  const playerRef = db.collection("players").doc(uid);
+  await playerRef.collection("actions").add({ at, ...entry });
+  if (entry.newJobTitle) {
+    await playerRef.collection("jobTitleHistory").add({
+      at,
+      fromTitle: entry.jobTitleAtTime,
+      toTitle: entry.newJobTitle,
+      viaEventTitle: entry.eventTitle,
+      viaComboKey: entry.comboKey,
+    });
+  }
+}
+
 export const resolveEvent = onCall(
   { secrets: [OPENAI_API_KEY, ...TELEGRAM_SECRETS], region: "asia-east1", maxInstances: 5 },
   async (request) => {
@@ -438,7 +474,17 @@ export const resolveEvent = onCall(
     const docRef = db.collection("events").doc(comboKey);
     const existing = await docRef.get();
     if (existing.exists) {
-      return existing.data() as StoredEvent;
+      const cachedEvent = existing.data() as StoredEvent;
+      await logPlayerAction(request.auth.uid, {
+        comboKey,
+        selection: data.selection,
+        durationUnits: data.durationUnits,
+        jobTitleAtTime: jobTitle,
+        eventTitle: cachedEvent.title,
+        source: "cached",
+        newJobTitle: cachedEvent.newJobTitle,
+      });
+      return cachedEvent;
     }
 
     const trimmedPlayerName = data.playerName?.trim().slice(0, 20);
@@ -474,6 +520,16 @@ export const resolveEvent = onCall(
         `🎉 職稱異動\n玩家:${discovererName}\n${jobTitle.zh} → ${event.newJobTitle.zh}\n事件:${event.title.zh}`
       );
     }
+
+    await logPlayerAction(request.auth.uid, {
+      comboKey,
+      selection: data.selection,
+      durationUnits: data.durationUnits,
+      jobTitleAtTime: jobTitle,
+      eventTitle: event.title,
+      source: "generated",
+      newJobTitle: event.newJobTitle,
+    });
 
     return event;
   }

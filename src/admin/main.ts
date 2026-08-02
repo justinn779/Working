@@ -114,6 +114,12 @@ let playerLedger: api.LedgerEntry[] = [];
 let playerLookupError: string | null = null;
 let ledgerDateFrom = "";
 let ledgerDateTo = "";
+let playerJobTitleHistory: api.JobTitleHistoryEntry[] = [];
+let jobHistoryDateFrom = "";
+let jobHistoryDateTo = "";
+let playerActions: api.PlayerActionEntry[] = [];
+let actionsDateFrom = "";
+let actionsDateTo = "";
 let adjustDeltaDraft = "";
 let adjustReasonDraft = "";
 let reviewReasonDraft = "";
@@ -613,6 +619,49 @@ function renderPlayersTab(): string {
               .join("")}
           </tbody>
         </table>
+
+        <h2>職稱歷程</h2>
+        <p class="admin-hint">預設最近 100 筆,可用日期篩選。</p>
+        ${renderDateRangeRow("job-history", jobHistoryDateFrom, jobHistoryDateTo, "job-history-date-apply-btn")}
+        <table class="admin-table">
+          <thead><tr><th>時間</th><th>從</th><th>到</th><th>觸發事件</th></tr></thead>
+          <tbody>
+            ${playerJobTitleHistory
+              .map(
+                (h) => `
+              <tr>
+                <td>${fmtTime(h.at)}</td>
+                <td>${escapeHtml(h.fromTitle.zh)}</td>
+                <td>${escapeHtml(h.toTitle.zh)}</td>
+                <td>${escapeHtml(h.viaEventTitle.zh)}</td>
+              </tr>
+            `
+              )
+              .join("")}
+          </tbody>
+        </table>
+
+        <h2>行為紀錄</h2>
+        <p class="admin-hint">每一次嘗試都會記錄一筆,包含重複玩到同一組合的情況。預設最近 100 筆,可用日期篩選。</p>
+        ${renderDateRangeRow("actions", actionsDateFrom, actionsDateTo, "actions-date-apply-btn")}
+        <table class="admin-table">
+          <thead><tr><th>時間</th><th>當時職稱</th><th>事件標題</th><th>來源</th><th>是否觸發異動</th></tr></thead>
+          <tbody>
+            ${playerActions
+              .map(
+                (a) => `
+              <tr>
+                <td>${fmtTime(a.at)}</td>
+                <td>${escapeHtml(a.jobTitleAtTime.zh)}</td>
+                <td>${escapeHtml(a.eventTitle.zh)}</td>
+                <td>${a.source === "cached" ? "快取" : "新生成"}</td>
+                <td>${a.newJobTitle ? `✅ → ${escapeHtml(a.newJobTitle.zh)}` : "—"}</td>
+              </tr>
+            `
+              )
+              .join("")}
+          </tbody>
+        </table>
       `
           : ""
       }
@@ -635,9 +684,15 @@ async function loadPlayer(uid: string) {
   playerActionMessage = null;
   ledgerDateFrom = "";
   ledgerDateTo = "";
+  jobHistoryDateFrom = "";
+  jobHistoryDateTo = "";
+  actionsDateFrom = "";
+  actionsDateTo = "";
   try {
     playerWallet = await api.fetchPlayerWallet(uid);
     playerLedger = await api.fetchPlayerLedger(uid);
+    playerJobTitleHistory = await api.fetchPlayerJobTitleHistory(uid);
+    playerActions = await api.fetchPlayerActions(uid);
     if (!playerWallet) playerLookupError = "找不到這個玩家";
   } catch (err) {
     playerLookupError = (err as Error).message;
@@ -682,6 +737,32 @@ function attachPlayersTabHandlers() {
     ledgerDateTo = document.querySelector<HTMLInputElement>("#ledger-date-to")?.value ?? "";
     try {
       playerLedger = await api.fetchPlayerLedger(playerUidInput, { startMs, endMs });
+    } catch (err) {
+      playerLookupError = (err as Error).message;
+    }
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>("#job-history-date-apply-btn")?.addEventListener("click", async () => {
+    if (!playerUidInput) return;
+    const { startMs, endMs } = parseDateRange("job-history");
+    jobHistoryDateFrom = document.querySelector<HTMLInputElement>("#job-history-date-from")?.value ?? "";
+    jobHistoryDateTo = document.querySelector<HTMLInputElement>("#job-history-date-to")?.value ?? "";
+    try {
+      playerJobTitleHistory = await api.fetchPlayerJobTitleHistory(playerUidInput, { startMs, endMs });
+    } catch (err) {
+      playerLookupError = (err as Error).message;
+    }
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>("#actions-date-apply-btn")?.addEventListener("click", async () => {
+    if (!playerUidInput) return;
+    const { startMs, endMs } = parseDateRange("actions");
+    actionsDateFrom = document.querySelector<HTMLInputElement>("#actions-date-from")?.value ?? "";
+    actionsDateTo = document.querySelector<HTMLInputElement>("#actions-date-to")?.value ?? "";
+    try {
+      playerActions = await api.fetchPlayerActions(playerUidInput, { startMs, endMs });
     } catch (err) {
       playerLookupError = (err as Error).message;
     }

@@ -24,6 +24,8 @@ import {
   type TopupProduct,
 } from "./paypalTopup";
 import { loadPaypalSdk, renderPaypalButtons } from "./paypalSdk";
+import { fetchOwnActions, fetchOwnJobTitleHistory } from "./playerLog";
+import type { JobTitleHistoryEntry, PlayerActionEntry } from "./playerLog";
 import {
   hasSavedState,
   isUnlocked,
@@ -35,6 +37,7 @@ import {
 import { CATEGORY_LABEL, CATEGORY_ORDER, PLAYER_TOKEN } from "./types";
 import type { Announcement, Campaign, Category, Localized, Selection } from "./types";
 import type { User } from "firebase/auth";
+import type { QueryDocumentSnapshot } from "firebase/firestore";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -266,6 +269,34 @@ function purchaseFlowKind(): PurchaseFlow["kind"] {
   return purchaseFlow.kind;
 }
 
+async function loadActionLog(loadMore = false) {
+  if (!currentUser) return;
+  actionLogLoading = true;
+  render();
+  try {
+    const page = await fetchOwnActions(currentUser.uid, loadMore ? actionLogLastDoc : undefined);
+    actionLogEntries = loadMore ? [...actionLogEntries, ...page.entries] : page.entries;
+    actionLogLastDoc = page.lastDoc;
+    actionLogHasMore = page.hasMore;
+    actionLogLoaded = true;
+  } catch (err) {
+    console.warn("讀取行為紀錄失敗", err);
+  }
+  actionLogLoading = false;
+  render();
+}
+
+async function loadJobTitleTimeline() {
+  if (!currentUser) return;
+  try {
+    jobTitleTimeline = await fetchOwnJobTitleHistory(currentUser.uid);
+    jobTitleTimelineLoaded = true;
+  } catch (err) {
+    console.warn("讀取職涯歷程失敗", err);
+  }
+  render();
+}
+
 async function loadCampaigns() {
   campaignsLoading = true;
   campaignsLoadError = null;
@@ -446,12 +477,24 @@ const historyFilters: Record<Category, string | null> = {
   object: null,
 };
 
-/** Which sub-view the 歷史 tab shows — 事件 (past resolved events, the
- * original history list) or 要素 (every unlocked material's own discovery
- * record). Not persisted, resets to "events" on reload like the rest of
- * this transient play-page UI state. */
-type HistorySubTab = "events" | "materials";
+/** Which sub-view the 歷史 tab shows — 事件 (past resolved events, deduped
+ * by comboKey), 要素 (every unlocked material's own discovery record), or
+ * 紀錄 (every resolveEvent attempt including repeats, plus the job-title
+ * timeline — fetched from Firestore, see src/playerLog.ts). Not persisted,
+ * resets to "events" on reload like the rest of this transient play-page UI
+ * state. */
+type HistorySubTab = "events" | "materials" | "log";
 let historySubTab: HistorySubTab = "events";
+
+/** Fetched once per session on first opening the 紀錄 sub-tab, then cached
+ * here — no need to re-fetch on every render/tab-switch. */
+let actionLogEntries: PlayerActionEntry[] = [];
+let actionLogLastDoc: QueryDocumentSnapshot | null = null;
+let actionLogHasMore = false;
+let actionLogLoading = false;
+let actionLogLoaded = false;
+let jobTitleTimeline: JobTitleHistoryEntry[] = [];
+let jobTitleTimelineLoaded = false;
 /** Same collapsed-by-default/expand-to-see-detail pattern as
  * expandedHistoryKeys, but for material entries in the 要素 sub-tab. */
 const expandedMaterialIds = new Set<string>();
@@ -1281,13 +1324,78 @@ function renderHistoryMaterialsContent(): string {
   `;
 }
 
+/** Single row in the 紀錄 sub-tab's attempt log — unlike renderHistoryEntry,
+ * there's no dedup key to expand/collapse by (the same comboKey can appear
+ * many times here), so every row is always fully shown. */
+function renderActionLogEntry(entry: PlayerActionEntry): string {
+  return `
+    <li class="collection-entry">
+      <div class="collection-entry-details">
+        <div class="collection-entry-header">
+          <span class="collection-entry-title">${escapeHtml(personalize(L(entry.eventTitle)))}</span>
+          <span class="collection-entry-duration">${formatDuration(entry.durationUnits)}</span>
+        </div>
+        <p class="collection-desc">${escapeHtml(
+          t("actionLogEntryLine", { jobTitle: L(entry.jobTitleAtTime), time: formatTimestamp(entry.at) })
+        )}</p>
+        ${
+          entry.newJobTitle
+            ? `<div class="unlock-toast">${escapeHtml(t("actionLogChangedTag", { title: L(entry.newJobTitle) }))}</div>`
+            : ""
+        }
+      </div>
+    </li>
+  `;
+}
+
+function renderJobTitleTimelineEntry(entry: JobTitleHistoryEntry): string {
+  return `<li class="collection-entry"><div class="collection-entry-details"><p class="collection-desc">${escapeHtml(
+    t("careerTimelineLine", { from: L(entry.fromTitle), to: L(entry.toTitle), time: formatTimestamp(entry.at) })
+  )}</p></div></li>`;
+}
+
+function renderHistoryLogContent(): string {
+  return `
+    <h3 class="material-history-group-title">${t("careerTimelineTitle")}</h3>
+    <ol class="collection-list">
+      ${
+        jobTitleTimeline.length > 0
+          ? jobTitleTimeline.map(renderJobTitleTimelineEntry).join("")
+          : `<li class="collection-empty">${t("careerTimelineEmpty")}</li>`
+      }
+    </ol>
+    <h3 class="material-history-group-title">${t("actionLogTitle")}</h3>
+    <ol class="collection-list collection-list-full" id="action-log-list">
+      ${
+        actionLogEntries.length > 0
+          ? actionLogEntries.map((e) => renderActionLogEntry(e)).join("")
+          : `<li class="collection-empty">${t("actionLogEmpty")}</li>`
+      }
+    </ol>
+    ${
+      actionLogHasMore
+        ? `<button id="action-log-load-more-btn" class="modal-btn-secondary" ${actionLogLoading ? "disabled" : ""}>${
+            actionLogLoading ? t("actionLogLoadingBtn") : t("actionLogLoadMoreBtn")
+          }</button>`
+        : ""
+    }
+  `;
+}
+
 function renderHistoryContent(): string {
   return `
     <div class="history-subtabs">
       <button class="history-subtab-btn ${historySubTab === "events" ? "active" : ""}" data-history-subtab="events">${t("historySubTabEvents")}</button>
       <button class="history-subtab-btn ${historySubTab === "materials" ? "active" : ""}" data-history-subtab="materials">${t("historySubTabMaterials")}</button>
+      <button class="history-subtab-btn ${historySubTab === "log" ? "active" : ""}" data-history-subtab="log">${t("historySubTabLog")}</button>
     </div>
-    ${historySubTab === "events" ? renderHistoryEventsContent() : renderHistoryMaterialsContent()}
+    ${
+      historySubTab === "events"
+        ? renderHistoryEventsContent()
+        : historySubTab === "materials"
+          ? renderHistoryMaterialsContent()
+          : renderHistoryLogContent()
+    }
   `;
 }
 
@@ -1821,8 +1929,19 @@ function attachHistoryHandlers() {
       if (next === historySubTab) return;
       historySubTab = next;
       render();
+      if (next === "log") {
+        if (!actionLogLoaded && !actionLogLoading) loadActionLog();
+        if (!jobTitleTimelineLoaded) loadJobTitleTimeline();
+      }
     });
   });
+
+  if (historySubTab === "log") {
+    document.querySelector<HTMLButtonElement>("#action-log-load-more-btn")?.addEventListener("click", () => {
+      loadActionLog(true);
+    });
+    return;
+  }
 
   if (historySubTab === "materials") {
     app.querySelectorAll<HTMLButtonElement>("[data-material-category-toggle]").forEach((btn) => {

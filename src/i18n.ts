@@ -129,6 +129,16 @@ const UI_STRINGS: Record<string, Record<LanguageCode, string>> = {
 
   historySubTabEvents: { zh: "事件", en: "Events" },
   historySubTabMaterials: { zh: "要素", en: "Materials" },
+  historySubTabLog: { zh: "紀錄", en: "Log" },
+  careerTimelineTitle: { zh: "職涯歷程", en: "Career Timeline" },
+  careerTimelineEmpty: { zh: "職稱還沒有變過。", en: "Your job title hasn't changed yet." },
+  careerTimelineLine: { zh: "{from} → {to} · {time}", en: "{from} → {to} · {time}" },
+  actionLogTitle: { zh: "嘗試紀錄", en: "Attempt Log" },
+  actionLogEmpty: { zh: "還沒有任何紀錄。", en: "No attempts logged yet." },
+  actionLogEntryLine: { zh: "職稱:{jobTitle} · {time}", en: "Title: {jobTitle} · {time}" },
+  actionLogChangedTag: { zh: "🎉 職稱異動 → {title}", en: "🎉 Title changed → {title}" },
+  actionLogLoadMoreBtn: { zh: "載入更多", en: "Load More" },
+  actionLogLoadingBtn: { zh: "載入中…", en: "Loading…" },
   materialSeedTag: { zh: "🎒 起始要素,一開始就擁有", en: "🎒 Starting material — you begin with this" },
   materialNoDescription: { zh: "(尚無說明)", en: "(No description yet)" },
   materialDiscovererLine: {

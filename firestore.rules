@@ -56,6 +56,19 @@ service cloud.firestore {
         allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
         allow write: if false;
       }
+
+      // Append-only per-attempt action log (every resolveEvent call, cached
+      // or freshly generated — see functions/src/index.ts's logPlayerAction)
+      // and the derived job-title change timeline. Same trust model as
+      // ledger: owner or admin reads, only the Cloud Function ever writes.
+      match /actions/{actionId} {
+        allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
+        allow write: if false;
+      }
+      match /jobTitleHistory/{historyId} {
+        allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
+        allow write: if false;
+      }
     }
 
     // Top-up product catalog: public read (so the market page can list

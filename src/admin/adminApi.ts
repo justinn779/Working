@@ -16,7 +16,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db, functions } from "../firebase";
-import type { Announcement, Campaign, Localized } from "../types";
+import type { Announcement, Campaign, Localized, Selection } from "../types";
 import type { OrderStatus, TopupOrder } from "../paypalTopup";
 
 // --- Types mirrored from functions/src/topupTypes.ts — this project
@@ -99,6 +99,30 @@ export interface PaymentReview {
   reason: string | null;
   setAt: number | null;
   setBy: string | null;
+}
+
+/** Mirrors functions/src/index.ts's logPlayerAction write shape — one entry
+ * per resolveEvent call (cached replays included), not deduped like the
+ * player-facing 事件 sub-tab's collectedComboKeys. */
+export interface PlayerActionEntry {
+  at: number;
+  comboKey: string;
+  selection: Selection;
+  durationUnits: number;
+  jobTitleAtTime: Localized;
+  eventTitle: Localized;
+  source: "cached" | "generated";
+  newJobTitle: Localized | null;
+}
+
+/** Mirrors functions/src/index.ts's logPlayerAction — only written when a
+ * resolveEvent call actually moved the player's job title. */
+export interface JobTitleHistoryEntry {
+  at: number;
+  fromTitle: Localized;
+  toTitle: Localized;
+  viaEventTitle: Localized;
+  viaComboKey: string;
 }
 
 export interface PlayerWallet {
@@ -212,6 +236,28 @@ export async function fetchPlayerLedger(uid: string, range?: DateRange): Promise
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => d.data() as LedgerEntry);
+}
+
+export async function fetchPlayerActions(uid: string, range?: DateRange): Promise<PlayerActionEntry[]> {
+  const q = query(
+    collection(db, "players", uid, "actions"),
+    ...dateRangeClauses(range, "at"),
+    orderBy("at", "desc"),
+    limit(RESULT_LIMIT)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as PlayerActionEntry);
+}
+
+export async function fetchPlayerJobTitleHistory(uid: string, range?: DateRange): Promise<JobTitleHistoryEntry[]> {
+  const q = query(
+    collection(db, "players", uid, "jobTitleHistory"),
+    ...dateRangeClauses(range, "at"),
+    orderBy("at", "desc"),
+    limit(RESULT_LIMIT)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as JobTitleHistoryEntry);
 }
 
 export async function fetchAllProducts(): Promise<AdminProduct[]> {
